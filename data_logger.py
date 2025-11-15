@@ -82,7 +82,7 @@ class DataLogger:
         return str_value
     
     def is_valid_features(self, features):
-        """Улучшенная проверка валидности фич"""
+        """🔧 УМЯГЧЕННАЯ проверка валидности фич"""
         try:
             self.data_quality_stats['total_attempted'] += 1
             
@@ -90,51 +90,67 @@ class DataLogger:
             required_fields = ['order_book_imbalance', 'spread_percent', 'current_price']
             for field in required_fields:
                 if field not in features:
+                    if self.data_quality_stats['total_attempted'] <= 5:
+                        print(f"❌ Отсутствует поле: {field}")
                     return False
             
-            # Проверяем диапазоны значений
+            # 🔧 УМЯГЧЕННЫЕ ПРОВЕРКИ ДИАПАЗОНОВ
+            
             spread = features.get('spread_percent', 0)
-            if spread > 1.0 or spread < 0:
+            if spread > 5.0 or spread < 0:  # 🔧 Увеличил с 1.0 до 5.0
+                if self.data_quality_stats['total_attempted'] <= 5:
+                    print(f"❌ Невалидный спред: {spread}")
                 return False
             
             imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.1 or imbalance > 0.9:
+            if imbalance < 0.01 or imbalance > 0.99:  # 🔧 Расширил диапазон
+                if self.data_quality_stats['total_attempted'] <= 5:
+                    print(f"❌ Невалидный imbalance: {imbalance}")
                 return False
             
             price = features.get('current_price', 0)
-            if price < 10000 or price > 100000:
+            if price < 5000 or price > 200000:  # 🔧 Расширил диапазон
+                if self.data_quality_stats['total_attempted'] <= 5:
+                    print(f"❌ Невалидная цена: {price}")
                 return False
             
             delta = abs(features.get('cumulative_delta', 0))
-            if delta > 5000:
+            if delta > 100000:  # 🔧 Увеличил лимит
+                if self.data_quality_stats['total_attempted'] <= 5:
+                    print(f"❌ Слишком большая дельта: {delta}")
                 return False
             
             volatility = features.get('volatility', 0)
-            if volatility < 0 or volatility > 10:
+            if volatility < 0 or volatility > 50:  # 🔧 Увеличил лимит
+                if self.data_quality_stats['total_attempted'] <= 5:
+                    print(f"❌ Невалидная волатильность: {volatility}")
                 return False
             
-            # Проверка на зашумленность данных
-            if self.is_noisy_data(features):
-                return False
-                
+            # 🔧 ДОБАВИЛ ДЕБАГ ДЛЯ ПОНИМАНИЯ ПРОБЛЕМ
+            if self.data_quality_stats['total_attempted'] <= 3:
+                print(f"🔍 ДЕБАГ фич #{self.data_quality_stats['total_attempted']}:")
+                print(f"   price: {price}, spread: {spread}, imbalance: {imbalance}")
+                print(f"   delta: {delta}, volatility: {volatility}")
+            
             return True
             
         except Exception as e:
+            if self.data_quality_stats['total_attempted'] <= 5:
+                print(f"❌ Ошибка проверки фич: {e}")
             return False
     
     def is_noisy_data(self, features):
-        """Проверяет данные на зашумленность"""
+        """🔧 УМЯГЧЕННАЯ проверка на зашумленность"""
         try:
-            # Проверяем аномальные скачки
+            # 🔧 ВРЕМЕННО ОТКЛЮЧИМ СЛИШКОМ СТРОГУЮ ПРОВЕРКУ
             price = features.get('current_price', 0)
             spread = features.get('spread_percent', 0)
             
-            # Слишком высокий спред = шум
-            if spread > 0.1:
+            # Только самые критические проверки
+            if price <= 0:
                 return True
                 
-            # Нулевая или отрицательная цена
-            if price <= 0:
+            if spread > 10.0:  # 🔧 Увеличил порог
                 return True
                 
             return False
@@ -147,29 +163,29 @@ class DataLogger:
         score = 100  # Начальная оценка
         
         try:
-            # Штрафы за разные аномалии
+            # 🔧 УМЯГЧЕННЫЕ ШТРАФЫ
             spread = features.get('spread_percent', 0)
-            if spread > 0.05:
-                score -= 20
-            elif spread > 0.02:
+            if spread > 0.1:
                 score -= 10
+            elif spread > 0.05:
+                score -= 5
                 
             imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.2 or imbalance > 0.8:
-                score -= 15
+            if imbalance < 0.3 or imbalance > 0.7:
+                score -= 10
                 
             volatility = features.get('volatility', 0)
-            if volatility > 2.0:
+            if volatility > 5.0:
                 score -= 10
                 
             # Бонус за хорошие данные
-            if 0.4 <= imbalance <= 0.6 and spread < 0.01:
-                score += 10
+            if 0.4 <= imbalance <= 0.6 and spread < 0.02:
+                score += 15
                 
             return max(0, min(100, score))
             
         except Exception as e:
-            return 0
+            return 50  # 🔧 Средняя оценка при ошибке
     
     def log_raw_data(self, features):
         """Логирует сырые данные для бэкапа с защитой CSV"""
@@ -202,6 +218,10 @@ class DataLogger:
             if not os.path.exists(self.data_file):
                 return True
                 
+            # Проверяем только каждые 100 записей чтобы не замедлять работу
+            if self.logged_count % 100 != 0:
+                return True
+                
             print("🔧 Проверяем целостность файла данных...")
             
             # Пробуем загрузить файл
@@ -221,14 +241,17 @@ class DataLogger:
             good_rows = []
             with open(backup_file, 'r', encoding='utf-8') as f:
                 reader = csv.reader(f)
-                headers = next(reader)  # Читаем заголовки
-                good_rows.append(headers)
-                
-                for i, row in enumerate(reader, start=2):
-                    if len(row) == len(headers):
-                        good_rows.append(row)
-                    else:
-                        print(f"⚠️ Пропущена строка {i}: неверное количество полей")
+                try:
+                    headers = next(reader)  # Читаем заголовки
+                    good_rows.append(headers)
+                    
+                    for i, row in enumerate(reader, start=2):
+                        if len(row) == len(headers):
+                            good_rows.append(row)
+                        else:
+                            print(f"⚠️ Пропущена строка {i}: неверное количество полей")
+                except StopIteration:
+                    print("⚠️ Файл пустой")
             
             # Записываем исправленный файл
             with open(self.data_file, 'w', newline='', encoding='utf-8') as f:
@@ -248,7 +271,7 @@ class DataLogger:
             current_time = time.time()
             
             # 🔧 ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ЦЕЛОСТНОСТИ ФАЙЛА
-            if self.logged_count % 50 == 0:
+            if self.logged_count % 100 == 0:
                 self.repair_data_file()
             
             # Всегда логируем сырые данные
@@ -324,7 +347,7 @@ class DataLogger:
                       f"quality={quality_score}%")
             else:
                 # Для нулевых target показываем реже
-                if self.logged_count % 10 == 0:
+                if self.logged_count % 20 == 0:
                     print(f"💾 ⚪ SAVED #{self.logged_count}: "
                           f"HOLD record | quality={quality_score}%")
             
@@ -339,18 +362,23 @@ class DataLogger:
     def print_data_quality_report(self):
         """Печатает отчет о качестве данных"""
         try:
-            success_rate = (self.data_quality_stats['successful_logs'] / 
-                          self.data_quality_stats['total_attempted'] * 100)
-            anomaly_rate = (self.data_quality_stats['anomalies_detected'] / 
-                          self.data_quality_stats['total_attempted'] * 100)
+            total_attempted = self.data_quality_stats['total_attempted']
+            successful_logs = self.data_quality_stats['successful_logs']
+            anomalies_detected = self.data_quality_stats['anomalies_detected']
             
-            print(f"\n📊 QUALITY REPORT: "
-                  f"Success: {success_rate:.1f}% | "
-                  f"Anomalies: {anomaly_rate:.1f}% | "
-                  f"Total: {self.data_quality_stats['total_attempted']}")
+            if total_attempted > 0:
+                success_rate = (successful_logs / total_attempted) * 100
+                anomaly_rate = (anomalies_detected / total_attempted) * 100
+                
+                print(f"\n📊 QUALITY REPORT: "
+                      f"Success: {success_rate:.1f}% | "
+                      f"Anomalies: {anomaly_rate:.1f}% | "
+                      f"Total: {total_attempted}")
+            else:
+                print(f"\n📊 QUALITY REPORT: No data collected yet")
                   
         except Exception as e:
-            pass
+            print(f"❌ Ошибка отчета качества: {e}")
     
     def get_data_stats(self):
         """Возвращает статистику собранных данных"""
@@ -364,7 +392,10 @@ class DataLogger:
             except:
                 # Если файл поврежден, восстанавливаем
                 if self.repair_data_file():
-                    df = pd.read_csv(self.data_file)
+                    try:
+                        df = pd.read_csv(self.data_file)
+                    except:
+                        return {'total_records': 0, 'labeled_records': 0}
                 else:
                     return {'total_records': 0, 'labeled_records': 0}
             
@@ -396,7 +427,10 @@ class DataLogger:
                 df = pd.read_csv(self.data_file)
             except:
                 if self.repair_data_file():
-                    df = pd.read_csv(self.data_file)
+                    try:
+                        df = pd.read_csv(self.data_file)
+                    except:
+                        return
                 else:
                     return
             
