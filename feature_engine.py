@@ -130,7 +130,7 @@ class FeatureEngine:
             print(f"❌ Price extraction error: {e}")
             return 0
     
-    def calculate_target(self, current_price, future_price, threshold=0.05):
+    def calculate_target(self, current_price, future_price, threshold=0.01):
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
         if current_price == 0 or future_price == 0:
             return 0
