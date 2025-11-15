@@ -1,6 +1,7 @@
 # data_logger.py
 import csv
 import os
+import time  # ДОБАВИТЬ ЭТУ СТРОКУ!
 from datetime import datetime
 
 class DataLogger:
