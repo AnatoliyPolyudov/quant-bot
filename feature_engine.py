@@ -1,12 +1,13 @@
 # feature_engine.py
 from datetime import datetime, timedelta
+import time
 
 class FeatureEngine:
     def __init__(self):
         self.cumulative_delta = 0
         self.trade_counts = {'buy': 0, 'sell': 0}
-        self.price_history = []
-        self.feature_history = []
+        self.price_history = []  # храним историю цен для расчета target
+        self.feature_history = []  # храним фичи с временными метками
         
     def calculate_order_book_imbalance(self, order_book_data):
         """Рассчитывает imbalance из стакана"""
@@ -22,7 +23,6 @@ class FeatureEngine:
             bids = book['bids']
             asks = book['asks']
             
-            # Берем минимум из доступных уровней и 3
             bid_levels = min(len(bids), 3)
             ask_levels = min(len(asks), 3)
             
@@ -37,7 +37,7 @@ class FeatureEngine:
             return imbalance
             
         except Exception as e:
-            return 0.5  # возвращаем нейтральное значение при ошибке
+            return 0.5
     
     def calculate_spread(self, order_book_data):
         """Рассчитывает спред из стакана"""
@@ -59,7 +59,7 @@ class FeatureEngine:
             return spread_percent
             
         except Exception as e:
-            return 0  # возвращаем 0 при ошибке
+            return 0
     
     def update_cumulative_delta(self, trade_data):
         """Обновляет cumulative delta из ленты сделок"""
@@ -98,22 +98,24 @@ class FeatureEngine:
             if not ticker_data or len(ticker_data) == 0:
                 return 0
             ticker = ticker_data[0]
-            return float(ticker.get('last', 0))
+            # Пробуем разные поля где может быть цена
+            price = ticker.get('last', ticker.get('lastPrice', ticker.get('close', 0)))
+            return float(price)
         except:
             return 0
     
-    def calculate_target(self, current_price, future_price, threshold=0.3):
+    def calculate_target(self, current_price, future_price, threshold=0.1):
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
         if current_price == 0 or future_price == 0:
             return 0
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > threshold:
+        if price_change > threshold:    # рост > 0.1%
             return 1
-        elif price_change < -threshold:
+        elif price_change < -threshold: # падение > 0.1%
             return -1
-        else:
+        else:                           # движение в пределах ±0.1%
             return 0
     
     def update_price_history(self, current_price, features):
@@ -121,26 +123,30 @@ class FeatureEngine:
         if current_price == 0:
             return
             
-        timestamp = datetime.now()
+        current_time = datetime.now()
         
         # Сохраняем текущие данные
         self.price_history.append({
-            'timestamp': timestamp,
+            'timestamp': current_time,
             'price': current_price,
             'features': features.copy()
         })
         
-        # Очищаем старые данные (храним 1 час)
-        one_hour_ago = timestamp - timedelta(hours=1)
+        # Очищаем старые данные (храним 10 минут)
+        ten_min_ago = current_time - timedelta(minutes=10)
         self.price_history = [
             p for p in self.price_history 
-            if p['timestamp'] > one_hour_ago
+            if p['timestamp'] > ten_min_ago
         ]
         
-        # Обновляем target для записей 5-минутной давности
-        five_min_ago = timestamp - timedelta(minutes=5)
+        # ОТЛАДКА: выводим размер истории
+        if len(self.price_history) % 10 == 0:
+            print(f"🔍 DEBUG: Price history size = {len(self.price_history)}")
+        
+        # Обновляем target для записей 1-минутной давности (для теста)
+        one_min_ago = current_time - timedelta(minutes=1)
         for data_point in self.price_history:
-            if (data_point['timestamp'] <= five_min_ago and 
+            if (data_point['timestamp'] <= one_min_ago and 
                 'target' not in data_point['features']):
                 
                 future_price = current_price
@@ -150,8 +156,13 @@ class FeatureEngine:
                 data_point['features']['target'] = target
                 
                 # Логируем данные с target
-                if target != 0:
-                    print(f"🎯 TARGET CALCULATED: {target} (price change: {(future_price - current_price_at_time) / current_price_at_time * 100:.2f}%)")
+                price_change = (future_price - current_price_at_time) / current_price_at_time * 100
+                print(f"🎯 TARGET CALCULATED: {target} (price change: {price_change:.3f}%)")
+                
+                # Возвращаем обновленные фичи для сохранения
+                return data_point['features']
+        
+        return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
         """Собирает все фичи вместе"""
@@ -172,7 +183,10 @@ class FeatureEngine:
             'target': 0
         }
         
-        self.update_price_history(current_price, features)
+        # Обновляем историю и получаем фичи с target (если есть)
+        updated_features = self.update_price_history(current_price, features)
+        if updated_features:
+            return updated_features
         
         return features
 
