@@ -22,15 +22,6 @@ class FeatureEngine:
                 
             book = order_book_data[0]
             
-            # ДИАГНОСТИКА структуры данных
-            if not hasattr(self, 'ob_debug_shown'):
-                self.ob_debug_shown = True
-                print(f"🔍 OrderBook структура: bids={len(book.get('bids', []))}, asks={len(book.get('asks', []))}")
-                if book.get('bids'):
-                    print(f"🔍 Sample bid: {book['bids'][0]}")
-                if book.get('asks'):
-                    print(f"🔍 Sample ask: {book['asks'][0]}")
-            
             if 'bids' not in book or 'asks' not in book:
                 return 0.5
             if len(book['bids']) == 0 or len(book['asks']) == 0:
@@ -257,18 +248,6 @@ class FeatureEngine:
         
         if targets_calculated > 0:
             print(f"✅ Calculated {targets_calculated} targets, total: {self.target_calculated_count}")
-            
-            # ДИАГНОСТИКА: принудительно логируем первый target
-            if self.target_calculated_count == 1:
-                try:
-                    from data_logger import data_logger
-                    for data_point in reversed(self.price_history):
-                        if 'target' in data_point['features']:
-                            print("🚨 FORCING FIRST DATA LOG...")
-                            data_logger.log_features(data_point['features'])
-                            break
-                except Exception as e:
-                    print(f"❌ Force log error: {e}")
             
             # Возвращаем последние фичи с target
             for data_point in reversed(self.price_history):
