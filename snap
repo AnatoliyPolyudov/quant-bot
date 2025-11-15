@@ -1,5 +1,816 @@
 
 
+===== baseline_strategy.py =====
+
+
+# baseline_strategy.py
+class BaselineStrategy:
+    def __init__(self):
+        self.min_imbalance = 0.6
+        self.min_delta = 10
+        self.max_spread = 0.05
+        
+    def analyze_signal(self, features):
+        """Анализирует фичи и возвращает торговый сигнал"""
+        imbalance = features.get('order_book_imbalance', 0.5)
+        delta = features.get('cumulative_delta', 0)
+        spread = features.get('spread_percent', 0)
+        funding = features.get('funding_rate', 0)
+        
+        # Базовые правила
+        signals = []
+        
+        # Правило 1: Сильный imbalance в пользу покупателей
+        if imbalance > self.min_imbalance:
+            signals.append(f"📊 Imbalance {imbalance:.3f} > {self.min_imbalance}")
+        
+        # Правило 2: Положительный cumulative delta
+        if delta > self.min_delta:
+            signals.append(f"📈 Delta {delta:.1f} > {self.min_delta}")
+        
+        # Правило 3: Низкий спред
+        if spread < self.max_spread:
+            signals.append(f"📏 Spread {spread:.4f}% < {self.max_spread}%")
+        else:
+            signals.append(f"❌ Spread {spread:.4f}% слишком высок")
+        
+        # Правило 4: Нейтральное финансирование
+        if abs(funding) < 0.0001:
+            signals.append("💰 Funding нейтральный")
+        else:
+            signals.append(f"⚠️ Funding {funding:.6f}")
+        
+        # Принятие решения
+        buy_signal = (imbalance > self.min_imbalance and 
+                     delta > self.min_delta and 
+                     spread < self.max_spread)
+        
+        sell_signal = (imbalance < (1 - self.min_imbalance) and 
+                      delta < -self.min_delta and 
+                      spread < self.max_spread)
+        
+        if buy_signal:
+            decision = "LONG"
+            confidence = min(imbalance * 100, 95)
+        elif sell_signal:
+            decision = "SHORT" 
+            confidence = min((1 - imbalance) * 100, 95)
+        else:
+            decision = "HOLD"
+            confidence = 0
+        
+        return {
+            'decision': decision,
+            'confidence': confidence,
+            'signals': signals,
+            'imbalance': imbalance,
+            'delta': delta,
+            'spread': spread
+        }
+
+# Глобальный экземпляр
+baseline_strategy = BaselineStrategy()
+
+
+===== config.py =====
+
+
+# config.py
+
+# Trading settings
+SYMBOL = "BTC-USDT-SWAP"
+TIMEFRAME = "1m"
+
+# Data collection
+WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
+CHANNELS = [
+    "books",              # Стакан L2
+    "trades",             # Лента сделок
+    "tickers"             # Тикеры (funding, OI)
+]
+
+# Feature settings
+FEATURE_WINDOW = 50
+
+# Model settings
+MIN_PROBABILITY = 0.65
+
+
+===== data_collector.py =====
+
+
+# data_collector.py
+import websocket
+import json
+import threading
+import time
+from datetime import datetime
+from feature_engine import feature_engine
+from data_logger import data_logger
+from baseline_strategy import baseline_strategy
+
+class OKXDataCollector:
+    def __init__(self):
+        self.ws = None
+        self.data_buffer = []
+        self.message_count = 0
+        self.last_feature_print = 0
+        self.last_data_log = 0
+        
+        # Раздельные буферы для разных типов данных
+        self.order_book_data = []
+        self.trade_data = []
+        self.ticker_data = []
+        
+    def on_message(self, ws, message):
+        """Обработка входящих сообщений"""
+        try:
+            data = json.loads(message)
+            self.message_count += 1
+            
+            # Обрабатываем разные типы сообщений
+            if 'event' in data:
+                if data['event'] != 'subscribe':  # Показываем только ошибки
+                    print(f"⚡ Event: {data['event']} - {data.get('msg', '')}")
+            elif 'data' in data:
+                channel = data.get('arg', {}).get('channel', 'unknown')
+                
+                # Сохраняем данные в соответствующие буферы
+                if channel == 'books':
+                    self.order_book_data = data['data']
+                elif channel == 'trades':
+                    self.trade_data = data['data']
+                elif channel == 'tickers':
+                    self.ticker_data = data['data']
+                
+                # Обновляем фичи и выводим/логируем
+                self.update_features()
+                
+        except Exception as e:
+            print(f"❌ Message error: {e}")
+    
+    def update_features(self):
+        """Обновляет фичи и управляет выводом/логированием"""
+        current_time = time.time()
+        
+        # Всегда обновляем фичи
+        features = feature_engine.get_all_features(
+            self.order_book_data, 
+            self.trade_data, 
+            self.ticker_data
+        )
+        
+        # Анализ бейзлайн-стратегией
+        strategy_result = baseline_strategy.analyze_signal(features)
+        
+        # Логируем данные каждую минуту
+        if current_time - self.last_data_log > 60:
+            self.last_data_log = current_time
+            data_logger.log_features(features)
+        
+        # Выводим в консоль каждые 30 секунд
+        if current_time - self.last_feature_print > 30:
+            self.last_feature_print = current_time
+            
+            print("\n" + "="*50)
+            print("🎯 REAL-TIME FEATURES + BASELINE STRATEGY")
+            print("="*50)
+            
+            print(f"📊 Order Book Imbalance: {features['order_book_imbalance']:.3f}")
+            print(f"📏 Spread: {features['spread_percent']:.4f}%")
+            print(f"📈 Cumulative Delta: {features['cumulative_delta']:.4f}")
+            print(f"💰 Funding Rate: {features['funding_rate']:.6f}")
+            print(f"🔄 Trades: {features['buy_trades']} buy / {features['sell_trades']} sell")
+            
+            print(f"\n🤖 BASELINE DECISION: {strategy_result['decision']}")
+            print(f"🎯 Confidence: {strategy_result['confidence']:.1f}%")
+            
+            for signal in strategy_result['signals']:
+                print(f"   {signal}")
+                
+            print(f"💾 Data points: {self.message_count}")
+            print("="*50 + "\n")
+    
+    def on_error(self, ws, error):
+        print(f"❌ WebSocket error: {error}")
+    
+    def on_close(self, ws, close_status_code, close_msg):
+        print("🔌 WebSocket closed")
+        # Автопереподключение
+        time.sleep(5)
+        self.start()
+    
+    def on_open(self, ws):
+        print(f"🔌 WebSocket connected at {datetime.now()}")
+        # Подписываемся на каналы
+        from config import CHANNELS, SYMBOL
+        for channel in CHANNELS:
+            subscribe_msg = {
+                "op": "subscribe",
+                "args": [
+                    {
+                        "channel": channel,
+                        "instId": SYMBOL
+                    }
+                ]
+            }
+            ws.send(json.dumps(subscribe_msg))
+            print(f"📡 Subscribed to: {channel} for {SYMBOL}")
+    
+    def start(self):
+        """Запуск сбора данных"""
+        from config import WS_URL
+        
+        self.ws = websocket.WebSocketApp(
+            WS_URL,
+            on_message=self.on_message,
+            on_error=self.on_error, 
+            on_close=self.on_close,
+            on_open=self.on_open
+        )
+        
+        # Запускаем в отдельном потоке
+        self.ws_thread = threading.Thread(target=self.ws.run_forever)
+        self.ws_thread.daemon = True
+        self.ws_thread.start()
+        print("🚀 Data collector started")
+
+# Глобальный экземпляр - ОБЯЗАТЕЛЬНО В КОНЦЕ ФАЙЛА
+data_collector = OKXDataCollector()
+
+
+===== data_logger.py =====
+
+
+# data_logger.py
+import csv
+import os
+from datetime import datetime
+
+class DataLogger:
+    def __init__(self):
+        self.data_file = "data/training_data.csv"
+        self.setup_data_file()
+    
+    def setup_data_file(self):
+        """Создает файл данных с заголовками включая target"""
+        os.makedirs("data", exist_ok=True)
+        
+        if not os.path.exists(self.data_file):
+            with open(self.data_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'timestamp',
+                    'order_book_imbalance',
+                    'spread_percent', 
+                    'cumulative_delta',
+                    'funding_rate',
+                    'buy_trades',
+                    'sell_trades',
+                    'total_trades',
+                    'current_price',
+                    'target'  # -1/0/+1
+                ])
+    
+    def log_features(self, features):
+        """Сохраняет фичи с target в CSV"""
+        try:
+            # Сохраняем только если есть target (не 0)
+            if features.get('target', 0) != 0:
+                with open(self.data_file, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        features['timestamp'],
+                        features['order_book_imbalance'],
+                        features['spread_percent'],
+                        features['cumulative_delta'],
+                        features['funding_rate'],
+                        features['buy_trades'],
+                        features['sell_trades'],
+                        features['total_trades'],
+                        features['current_price'],
+                        features['target']
+                    ])
+                print(f"💾 Data logged: target={features['target']}")
+        except Exception as e:
+            print(f"❌ Data logging error: {e}")
+
+# Глобальный экземпляр
+data_logger = DataLogger()
+
+
+===== data_monitor.py =====
+
+
+# data_monitor.py
+import os
+import csv
+from datetime import datetime
+import time
+
+class DataMonitor:
+    def __init__(self):
+        self.data_file = "data/training_data.csv"
+        
+    def check_data_progress(self):
+        """Проверяет прогресс сбора данных без pandas"""
+        if not os.path.exists(self.data_file):
+            return {
+                'total_records': 0,
+                'labeled_records': 0,
+                'target_distribution': {},
+                'data_quality': 'NO_DATA'
+            }
+        
+        try:
+            total_records = 0
+            labeled_records = 0
+            target_dist = {-1: 0, 0: 0, 1: 0}
+            
+            with open(self.data_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    total_records += 1
+                    
+                    # Проверяем target
+                    if 'target' in row and row['target'].strip():
+                        try:
+                            target_val = int(row['target'])
+                            labeled_records += 1
+                            if target_val in [-1, 0, 1]:
+                                target_dist[target_val] += 1
+                        except ValueError:
+                            pass
+            
+            # Качество данных
+            if labeled_records == 0 and total_records > 0:
+                quality = 'COLLECTING'
+            elif labeled_records < 50:
+                quality = 'MINIMAL'
+            elif labeled_records < 200:
+                quality = 'GOOD'
+            else:
+                quality = 'EXCELLENT'
+                
+            # Убираем нулевые значения из распределения
+            target_dist = {k: v for k, v in target_dist.items() if v > 0}
+            
+            return {
+                'total_records': total_records,
+                'labeled_records': labeled_records,
+                'target_distribution': target_dist,
+                'data_quality': quality
+            }
+            
+        except Exception as e:
+            return {
+                'total_records': 0,
+                'labeled_records': 0,
+                'target_distribution': {},
+                'data_quality': 'ERROR'
+            }
+    
+    def print_progress_report(self):
+        """Выводит отчет о прогрессе"""
+        progress = self.check_data_progress()
+        
+        print("\n" + "="*60)
+        print("📊 ОТЧЕТ О СБОРЕ ДАННЫХ")
+        print("="*60)
+        
+        print(f"📁 Всего записей: {progress['total_records']}")
+        print(f"🎯 Размеченных записей: {progress['labeled_records']}")
+        print(f"📈 Качество данных: {progress['data_quality']}")
+        
+        if progress['target_distribution']:
+            print(f"📊 Распределение target: {progress['target_distribution']}")
+        
+        # Рекомендации
+        if progress['data_quality'] == 'NO_DATA':
+            print("💡 Рекомендация: Запустите бота для сбора данных")
+        elif progress['data_quality'] == 'COLLECTING':
+            print("💡 Рекомендация: Данные собираются, target скоро будет")
+        elif progress['data_quality'] == 'MINIMAL':
+            records_needed = 50 - progress['labeled_records']
+            print(f"💡 Рекомендация: Соберите еще {records_needed} записей для обучения")
+        elif progress['data_quality'] == 'GOOD':
+            print("💡 Рекомендация: Можно начинать обучение модели!")
+        elif progress['data_quality'] == 'EXCELLENT':
+            print("💡 Рекомендация: Отличный объем данных для обучения!")
+        
+        print("="*60)
+
+def monitor_continuous():
+    """Непрерывный мониторинг прогресса"""
+    monitor = DataMonitor()
+    
+    print("🚀 ЗАПУСК МОНИТОРИНГА ДАННЫХ...")
+    print("💡 Мониторинг будет обновляться каждые 30 секунд")
+    print("💡 Для остановки нажмите Ctrl+C\n")
+    
+    try:
+        while True:
+            monitor.print_progress_report()
+            time.sleep(30)
+    except KeyboardInterrupt:
+        print("\n🛑 Мониторинг остановлен")
+
+if __name__ == "__main__":
+    monitor_continuous()
+
+
+===== feature_engine.py =====
+
+
+# feature_engine.py
+from datetime import datetime, timedelta
+import time
+
+class FeatureEngine:
+    def __init__(self):
+        self.cumulative_delta = 0
+        self.trade_counts = {'buy': 0, 'sell': 0}
+        self.price_history = []
+        self.feature_history = []
+        self.price_debug_count = 0
+        self.target_calculated_count = 0
+        
+    def calculate_order_book_imbalance(self, order_book_data):
+        """Рассчитывает imbalance из стакана"""
+        try:
+            if not order_book_data or len(order_book_data) == 0:
+                return 0.5
+            if 'asks' not in order_book_data[0] or 'bids' not in order_book_data[0]:
+                return 0.5
+            if len(order_book_data[0]['bids']) == 0 or len(order_book_data[0]['asks']) == 0:
+                return 0.5
+                
+            book = order_book_data[0]
+            bids = book['bids']
+            asks = book['asks']
+            
+            bid_levels = min(len(bids), 3)
+            ask_levels = min(len(asks), 3)
+            
+            bid_volume = sum(float(bid[1]) for bid in bids[:bid_levels])
+            ask_volume = sum(float(ask[1]) for ask in asks[:ask_levels])
+            
+            total_volume = bid_volume + ask_volume
+            if total_volume == 0:
+                return 0.5
+                
+            imbalance = bid_volume / total_volume
+            return imbalance
+            
+        except Exception as e:
+            return 0.5
+    
+    def calculate_spread(self, order_book_data):
+        """Рассчитывает спред из стакана"""
+        try:
+            if not order_book_data or len(order_book_data) == 0:
+                return 0
+            if 'asks' not in order_book_data[0] or 'bids' not in order_book_data[0]:
+                return 0
+            if len(order_book_data[0]['bids']) == 0 or len(order_book_data[0]['asks']) == 0:
+                return 0
+                
+            book = order_book_data[0]
+            best_bid = float(book['bids'][0][0])
+            best_ask = float(book['asks'][0][0])
+            
+            spread = best_ask - best_bid
+            spread_percent = (spread / best_bid) * 100
+            
+            return spread_percent
+            
+        except Exception as e:
+            return 0
+    
+    def update_cumulative_delta(self, trade_data):
+        """Обновляет cumulative delta из ленты сделок"""
+        try:
+            if not trade_data:
+                return self.cumulative_delta
+                
+            for trade in trade_data:
+                if 'side' in trade:
+                    if trade['side'] == 'buy':
+                        self.cumulative_delta += float(trade.get('sz', 0))
+                        self.trade_counts['buy'] += 1
+                    elif trade['side'] == 'sell':
+                        self.cumulative_delta -= float(trade.get('sz', 0))
+                        self.trade_counts['sell'] += 1
+                    
+            return self.cumulative_delta
+            
+        except Exception as e:
+            return self.cumulative_delta
+    
+    def extract_funding_rate(self, ticker_data):
+        """Извлекает funding rate из тикеров"""
+        try:
+            if not ticker_data or len(ticker_data) == 0:
+                return 0
+            ticker = ticker_data[0]
+            funding_rate = float(ticker.get('fundingRate', 0))
+            return funding_rate
+        except:
+            return 0
+    
+    def get_current_price(self, ticker_data):
+        """Извлекает текущую цену из тикеров"""
+        try:
+            if not ticker_data or len(ticker_data) == 0:
+                return 0
+            
+            ticker = ticker_data[0]
+            
+            # Пробуем разные поля где может быть цена
+            if 'last' in ticker and ticker['last']:
+                price = float(ticker['last'])
+            elif 'lastPrice' in ticker and ticker['lastPrice']:
+                price = float(ticker['lastPrice']) 
+            elif 'close' in ticker and ticker['close']:
+                price = float(ticker['close'])
+            elif 'askPx' in ticker and 'bidPx' in ticker:
+                # Берем среднюю между лучшими ценами
+                price = (float(ticker['askPx']) + float(ticker['bidPx'])) / 2
+            elif 'markPx' in ticker:
+                price = float(ticker['markPx'])
+            else:
+                return 0
+            
+            return price
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_target(self, current_price, future_price, threshold=0.05):
+        """Рассчитывает трехклассовую цель (-1/0/+1)"""
+        if current_price == 0 or future_price == 0:
+            return 0
+            
+        price_change = (future_price - current_price) / current_price * 100
+        
+        if price_change > threshold:
+            return 1
+        elif price_change < -threshold:
+            return -1
+        else:
+            return 0
+    
+    def update_price_history(self, current_price, features):
+        """Обновляет историю цен и фичей"""
+        if current_price == 0:
+            return None
+            
+        current_time = datetime.now()
+        
+        # Сохраняем текущие данные
+        self.price_history.append({
+            'timestamp': current_time,
+            'price': current_price,
+            'features': features.copy()
+        })
+        
+        # УВЕЛИЧИВАЕМ историю до 1000 записей
+        if len(self.price_history) > 1000:
+            self.price_history = self.price_history[-1000:]
+        
+        # УМЕНЬШАЕМ частоту отладки (только каждые 100 записей)
+        if len(self.price_history) % 100 == 0:
+            oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
+            print(f"🔍 DEBUG: History size = {len(self.price_history)}, oldest age = {oldest_age:.1f}s")
+        
+        # РАСЧЕТ TARGET: для записей старше 20 секунд (уменьшаем для теста)
+        twenty_sec_ago = current_time - timedelta(seconds=20)
+        
+        for data_point in self.price_history:
+            if (data_point['timestamp'] <= twenty_sec_ago and 
+                'target' not in data_point['features']):
+                
+                future_price = current_price
+                current_price_at_time = data_point['price']
+                
+                target = self.calculate_target(current_price_at_time, future_price)
+                data_point['features']['target'] = target
+                self.target_calculated_count += 1
+                
+                # Логируем ВСЕГДА
+                price_change = (future_price - current_price_at_time) / current_price_at_time * 100
+                print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
+                
+                return data_point['features']
+        
+        return None
+    
+    def get_all_features(self, order_book_data, trade_data, ticker_data):
+        """Собирает все фичи вместе"""
+        self.update_cumulative_delta(trade_data)
+        
+        current_price = self.get_current_price(ticker_data)
+        
+        features = {
+            'timestamp': datetime.now().isoformat(),
+            'order_book_imbalance': self.calculate_order_book_imbalance(order_book_data),
+            'spread_percent': self.calculate_spread(order_book_data),
+            'cumulative_delta': self.cumulative_delta,
+            'funding_rate': self.extract_funding_rate(ticker_data),
+            'buy_trades': self.trade_counts['buy'],
+            'sell_trades': self.trade_counts['sell'],
+            'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
+            'current_price': current_price,
+            'target': 0
+        }
+        
+        # Обновляем историю и получаем фичи с target (если есть)
+        updated_features = self.update_price_history(current_price, features)
+        if updated_features:
+            return updated_features
+        
+        return features
+
+# Глобальный экземпляр
+feature_engine = FeatureEngine()
+
+
 ===== main.py =====
 
 
+# main.py
+from data_collector import data_collector
+from data_monitor import DataMonitor
+import time
+
+def main():
+    print("🚀 Quantum Bot Starting...")
+    
+    # Запускаем сбор данных
+    data_collector.start()
+    
+    # Монитор прогресса
+    monitor = DataMonitor()
+    
+    # Главный цикл
+    try:
+        last_progress_check = 0
+        
+        while True:
+            current_time = time.time()
+            
+            # Показываем прогресс каждые 2 минуты
+            if current_time - last_progress_check > 120:
+                monitor.print_progress_report()
+                last_progress_check = current_time
+            
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped")
+
+if __name__ == "__main__":
+    main()
+
+
+===== train_model.py =====
+
+
+# train_model.py
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.metrics import classification_report, accuracy_score
+import joblib
+import os
+
+def load_training_data():
+    """Загружает данные для обучения"""
+    data_file = "data/training_data.csv"
+    
+    if not os.path.exists(data_file):
+        print("❌ Файл с данными не найден. Сначала соберите данные.")
+        return None
+    
+    df = pd.read_csv(data_file)
+    print(f"📊 Загружено {len(df)} записей")
+    
+    # Проверяем, есть ли target
+    if 'target' not in df.columns or df['target'].isna().all():
+        print("❌ Нет размеченных данных (target). Продолжайте сбор данных.")
+        return None
+    
+    # Убираем строки без target
+    df = df.dropna(subset=['target'])
+    df['target'] = df['target'].astype(int)
+    
+    print(f"🎯 Размеченных записей: {len(df)}")
+    print(f"📈 Распределение target: {df['target'].value_counts().to_dict()}")
+    
+    return df
+
+def create_baseline_model(df):
+    """Создает бейзлайн модель на основе простых правил"""
+    print("\n🤖 БЕЙЗЛАЙН МОДЕЛЬ (правила):")
+    
+    # Правило 1: Imbalance > 0.6 = покупать
+    df['baseline_imbalance'] = (df['order_book_imbalance'] > 0.6).astype(int)
+    accuracy_imbalance = accuracy_score(df['target'] == 1, df['baseline_imbalance'])
+    print(f"📊 Imbalance > 0.6 accuracy: {accuracy_imbalance:.3f}")
+    
+    # Правило 2: Delta > 0 = покупать
+    df['baseline_delta'] = (df['cumulative_delta'] > 0).astype(int)
+    accuracy_delta = accuracy_score(df['target'] == 1, df['baseline_delta'])
+    print(f"📈 Delta > 0 accuracy: {accuracy_delta:.3f}")
+    
+    # Комбинированное правило
+    df['baseline_combined'] = ((df['order_book_imbalance'] > 0.6) & 
+                              (df['cumulative_delta'] > 0)).astype(int)
+    accuracy_combined = accuracy_score(df['target'] == 1, df['baseline_combined'])
+    print(f"🎯 Combined rule accuracy: {accuracy_combined:.3f}")
+
+def train_ml_model(df):
+    """Обучает ML модель"""
+    print("\n🧠 ОБУЧЕНИЕ ML МОДЕЛИ...")
+    
+    # Признаки для модели
+    feature_columns = [
+        'order_book_imbalance',
+        'spread_percent', 
+        'cumulative_delta',
+        'funding_rate',
+        'buy_trades',
+        'sell_trades',
+        'total_trades'
+    ]
+    
+    # Проверяем наличие всех признаков
+    missing_features = [f for f in feature_columns if f not in df.columns]
+    if missing_features:
+        print(f"❌ Отсутствуют признаки: {missing_features}")
+        return None
+    
+    X = df[feature_columns]
+    y = df['target']
+    
+    # Убираем NaN
+    mask = ~X.isna().any(axis=1)
+    X = X[mask]
+    y = y[mask]
+    
+    print(f"📊 Данные для обучения: {len(X)} записей")
+    
+    # Кросс-валидация с временными рядами
+    tscv = TimeSeriesSplit(n_splits=5)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    
+    # Кросс-валидация
+    scores = cross_val_score(model, X, y, cv=tscv, scoring='accuracy')
+    print(f"📊 Кросс-валидация accuracy: {scores.mean():.3f} (+/- {scores.std() * 2:.3f})")
+    
+    # Обучение финальной модели
+    model.fit(X, y)
+    print("✅ Модель обучена!")
+    
+    # Важность признаков
+    feature_importance = pd.DataFrame({
+        'feature': feature_columns,
+        'importance': model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\n🎯 ВАЖНОСТЬ ПРИЗНАКОВ:")
+    for _, row in feature_importance.iterrows():
+        print(f"  {row['feature']}: {row['importance']:.3f}")
+    
+    return model
+
+def save_model(model, filename="models/quant_model.pkl"):
+    """Сохраняет обученную модель"""
+    os.makedirs("models", exist_ok=True)
+    joblib.dump(model, filename)
+    print(f"💾 Модель сохранена: {filename}")
+
+def main():
+    print("🚀 ЗАПУСК ОБУЧЕНИЯ МОДЕЛИ...")
+    
+    # Загружаем данные
+    df = load_training_data()
+    if df is None or len(df) < 50:
+        print(f"❌ Недостаточно данных для обучения. Нужно минимум 50 записей, сейчас: {len(df) if df is not None else 0}")
+        return
+    
+    # Бейзлайн модель
+    create_baseline_model(df)
+    
+    # ML модель (если достаточно данных)
+    if len(df) >= 50:
+        model = train_ml_model(df)
+        if model:
+            save_model(model)
+            print("\n🎉 Обучение завершено! Модель готова к использованию.")
+    else:
+        print(f"📊 Продолжайте сбор данных. Сейчас: {len(df)}/50")
+
+if __name__ == "__main__":
+    main()
