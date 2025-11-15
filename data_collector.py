@@ -86,10 +86,8 @@ class OKXDataCollector:
         # Анализ бейзлайн-стратегией
         strategy_result = baseline_strategy.analyze_signal(features)
         
-        # Логируем данные каждую минуту (только если есть реальные данные)
-        if current_time - self.last_data_log > 60 and features.get('current_price', 0) > 0:
-            self.last_data_log = current_time
-            data_logger.log_features(features)
+        # Логируем данные (логика теперь в data_logger)
+        data_logger.log_features(features)
         
         # Выводим в консоль каждые 10 секунд (чаще для отладки)
         if current_time - self.last_feature_print > 10:
