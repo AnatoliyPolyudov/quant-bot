@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+.env
+
+# Data
+data/
+logs/
+models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# API keys
+config/secrets.py
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
