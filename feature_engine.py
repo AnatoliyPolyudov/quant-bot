@@ -12,6 +12,7 @@ class FeatureEngine:
         self.target_calculated_count = 0
         self.last_update_time = 0
         self.update_interval = 1  # Обновлять фичи только раз в секунду
+        self.last_history_debug = 0
         
     def calculate_order_book_imbalance(self, order_book_data):
         """Рассчитывает imbalance из стакана"""
@@ -130,7 +131,7 @@ class FeatureEngine:
             print(f"❌ Price extraction error: {e}")
             return 0
     
-    def calculate_target(self, current_price, future_price, threshold=0.01):
+    def calculate_target(self, current_price, future_price, threshold=0.01):  # УМЕНЬШЕНО до 0.01%
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
         if current_price == 0 or future_price == 0:
             return 0
@@ -159,6 +160,15 @@ class FeatureEngine:
             
         current_time = datetime.now()
         
+        # ДЕБАГ ИСТОРИИ: показываем прогресс каждые 5 секунд
+        current_timestamp = time.time()
+        if current_timestamp - self.last_history_debug > 5:
+            self.last_history_debug = current_timestamp
+            oldest_age = 0
+            if self.price_history:
+                oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
+            print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
+        
         # ОГРАНИЧЕНИЕ: добавляем в историю только если прошло достаточно времени
         if len(self.price_history) > 0:
             last_time = self.price_history[-1]['timestamp']
@@ -177,14 +187,10 @@ class FeatureEngine:
         if len(self.price_history) > 500:
             self.price_history = self.price_history[-500:]
         
-        # РЕДКИЙ дебаг: только каждые 50 записей
-        if len(self.price_history) % 50 == 0:
-            oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
-            print(f"🔍 DEBUG: History size = {len(self.price_history)}, oldest age = {oldest_age:.1f}s")
-        
         # РАСЧЕТ TARGET: для записей старше 20 секунд
         twenty_sec_ago = current_time - timedelta(seconds=20)
         
+        targets_calculated = 0
         for i, data_point in enumerate(self.price_history):
             if (data_point['timestamp'] <= twenty_sec_ago and 
                 'target' not in data_point['features']):
@@ -195,13 +201,20 @@ class FeatureEngine:
                 target = self.calculate_target(current_price_at_time, future_price)
                 data_point['features']['target'] = target
                 self.target_calculated_count += 1
+                targets_calculated += 1
                 
                 # Логируем только значимые target
                 if target != 0:
                     price_change = (future_price - current_price_at_time) / current_price_at_time * 100
                     print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
-                
-                return data_point['features']
+        
+        if targets_calculated > 0:
+            print(f"✅ Calculated {targets_calculated} new targets, total: {self.target_calculated_count}")
+            
+            # Возвращаем последние фичи с target
+            for data_point in reversed(self.price_history):
+                if 'target' in data_point['features']:
+                    return data_point['features']
         
         return None
     
