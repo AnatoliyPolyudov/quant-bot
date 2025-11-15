@@ -1,6 +1,6 @@
 # data_monitor.py
-import pandas as pd
 import os
+import csv
 from datetime import datetime
 import time
 
@@ -9,7 +9,7 @@ class DataMonitor:
         self.data_file = "data/training_data.csv"
         
     def check_data_progress(self):
-        """Проверяет прогресс сбора данных"""
+        """Проверяет прогресс сбора данных без pandas"""
         if not os.path.exists(self.data_file):
             return {
                 'total_records': 0,
@@ -19,30 +19,37 @@ class DataMonitor:
             }
         
         try:
-            df = pd.read_csv(self.data_file)
-            total_records = len(df)
+            total_records = 0
+            labeled_records = 0
+            target_dist = {-1: 0, 0: 0, 1: 0}
             
-            # Проверяем размеченные данные
-            if 'target' in df.columns:
-                labeled_df = df.dropna(subset=['target'])
-                labeled_records = len(labeled_df)
-                
-                # Распределение target
-                target_dist = labeled_df['target'].value_counts().to_dict()
-                
-                # Качество данных
-                if labeled_records == 0:
-                    quality = 'COLLECTING'  # данные есть, но target еще не рассчитан
-                elif labeled_records < 50:
-                    quality = 'MINIMAL'
-                elif labeled_records < 200:
-                    quality = 'GOOD' 
-                else:
-                    quality = 'EXCELLENT'
+            with open(self.data_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    total_records += 1
+                    
+                    # Проверяем target
+                    if 'target' in row and row['target'].strip():
+                        try:
+                            target_val = int(row['target'])
+                            labeled_records += 1
+                            if target_val in [-1, 0, 1]:
+                                target_dist[target_val] += 1
+                        except ValueError:
+                            pass
+            
+            # Качество данных
+            if labeled_records == 0 and total_records > 0:
+                quality = 'COLLECTING'
+            elif labeled_records < 50:
+                quality = 'MINIMAL'
+            elif labeled_records < 200:
+                quality = 'GOOD'
             else:
-                labeled_records = 0
-                target_dist = {}
-                quality = 'NO_TARGET'
+                quality = 'EXCELLENT'
+                
+            # Убираем нулевые значения из распределения
+            target_dist = {k: v for k, v in target_dist.items() if v > 0}
             
             return {
                 'total_records': total_records,
@@ -54,7 +61,7 @@ class DataMonitor:
         except Exception as e:
             return {
                 'total_records': 0,
-                'labeled_records': 0, 
+                'labeled_records': 0,
                 'target_distribution': {},
                 'data_quality': 'ERROR'
             }
@@ -77,8 +84,6 @@ class DataMonitor:
         # Рекомендации
         if progress['data_quality'] == 'NO_DATA':
             print("💡 Рекомендация: Запустите бота для сбора данных")
-        elif progress['data_quality'] == 'NO_TARGET':
-            print("💡 Рекомендация: Ожидайте расчета target (5+ минут)")
         elif progress['data_quality'] == 'COLLECTING':
             print("💡 Рекомендация: Данные собираются, target скоро будет")
         elif progress['data_quality'] == 'MINIMAL':
@@ -102,7 +107,7 @@ def monitor_continuous():
     try:
         while True:
             monitor.print_progress_report()
-            time.sleep(30)  # Обновление каждые 30 секунд
+            time.sleep(30)
     except KeyboardInterrupt:
         print("\n🛑 Мониторинг остановлен")
 
