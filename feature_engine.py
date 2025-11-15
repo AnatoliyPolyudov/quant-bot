@@ -11,17 +11,26 @@ class FeatureEngine:
         self.price_debug_count = 0
         self.target_calculated_count = 0
         self.last_update_time = 0
-        self.update_interval = 1  # Обновлять фичи только раз в секунду
+        self.update_interval = 1
         self.last_history_debug = 0
         
     def calculate_order_book_imbalance(self, order_book_data):
-        """Рассчитывает imbalance из стакана"""
+        """Рассчитывает imbalance из стакана с защитой от ошибок"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0.5
+                
             book = order_book_data[0]
             
-            # Проверяем структуру данных OKX
+            # ДИАГНОСТИКА структуры данных
+            if not hasattr(self, 'ob_debug_shown'):
+                self.ob_debug_shown = True
+                print(f"🔍 OrderBook структура: bids={len(book.get('bids', []))}, asks={len(book.get('asks', []))}")
+                if book.get('bids'):
+                    print(f"🔍 Sample bid: {book['bids'][0]}")
+                if book.get('asks'):
+                    print(f"🔍 Sample ask: {book['asks'][0]}")
+            
             if 'bids' not in book or 'asks' not in book:
                 return 0.5
             if len(book['bids']) == 0 or len(book['asks']) == 0:
@@ -34,14 +43,22 @@ class FeatureEngine:
             bid_levels = min(len(bids), 3)
             ask_levels = min(len(asks), 3)
             
-            bid_volume = sum(float(bid[1]) for bid in bids[:bid_levels])
-            ask_volume = sum(float(ask[1]) for ask in asks[:ask_levels])
+            # ЗАЩИТА: проверяем что данные не пустые
+            if bid_levels == 0 or ask_levels == 0:
+                return 0.5
+            
+            bid_volume = sum(float(bid[1]) for bid in bids[:bid_levels] if len(bid) >= 2)
+            ask_volume = sum(float(ask[1]) for ask in asks[:ask_levels] if len(ask) >= 2)
             
             total_volume = bid_volume + ask_volume
             if total_volume == 0:
                 return 0.5
                 
             imbalance = bid_volume / total_volume
+            
+            # ЗАЩИТА: imbalance должен быть между 0 и 1
+            imbalance = max(0.0, min(1.0, imbalance))
+            
             return imbalance
             
         except Exception as e:
@@ -49,10 +66,11 @@ class FeatureEngine:
             return 0.5
     
     def calculate_spread(self, order_book_data):
-        """Рассчитывает спред из стакана"""
+        """Рассчитывает спред с защитой от отрицательных значений"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0
+                
             book = order_book_data[0]
             
             if 'bids' not in book or 'asks' not in book:
@@ -60,12 +78,24 @@ class FeatureEngine:
             if len(book['bids']) == 0 or len(book['asks']) == 0:
                 return 0
                 
+            # ЗАЩИТА: проверяем что есть данные в стакане
+            if len(book['bids'][0]) < 1 or len(book['asks'][0]) < 1:
+                return 0
+                
             best_bid = float(book['bids'][0][0])
             best_ask = float(book['asks'][0][0])
             
+            # ЗАЩИТА: bid должен быть меньше ask
+            if best_bid >= best_ask:
+                return 0
+                
             spread = best_ask - best_bid
             spread_percent = (spread / best_bid) * 100
             
+            # ЗАЩИТА: спред не может быть отрицательным
+            if spread_percent < 0:
+                return 0
+                
             return spread_percent
             
         except Exception as e:
@@ -80,13 +110,16 @@ class FeatureEngine:
                 
             for trade in trade_data:
                 if 'side' in trade and 'sz' in trade:
-                    size = float(trade['sz'])
-                    if trade['side'] == 'buy':
-                        self.cumulative_delta += size
-                        self.trade_counts['buy'] += 1
-                    elif trade['side'] == 'sell':
-                        self.cumulative_delta -= size
-                        self.trade_counts['sell'] += 1
+                    try:
+                        size = float(trade['sz'])
+                        if trade['side'] == 'buy':
+                            self.cumulative_delta += size
+                            self.trade_counts['buy'] += 1
+                        elif trade['side'] == 'sell':
+                            self.cumulative_delta -= size
+                            self.trade_counts['sell'] += 1
+                    except (ValueError, TypeError):
+                        continue
                     
             return self.cumulative_delta
             
@@ -131,7 +164,7 @@ class FeatureEngine:
             print(f"❌ Price extraction error: {e}")
             return 0
     
-    def calculate_target(self, current_price, future_price, threshold=0.005):  # УМЕНЬШЕНО до 0.005%
+    def calculate_target(self, current_price, future_price, threshold=0.005):
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
         if current_price == 0 or future_price == 0:
             return 0
@@ -146,7 +179,7 @@ class FeatureEngine:
             return 0
     
     def should_update_features(self):
-        """Проверяет, нужно ли обновлять фичи (ограничение частоты)"""
+        """Проверяет, нужно ли обновлять фичи"""
         current_time = time.time()
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
@@ -154,13 +187,13 @@ class FeatureEngine:
         return False
     
     def update_price_history(self, current_price, features):
-        """Обновляет историю цен и фичей (с ограничением частоты)"""
+        """Обновляет историю цен и фичей"""
         if current_price == 0:
             return None
             
         current_time = datetime.now()
         
-        # ДЕБАГ ИСТОРИИ: показываем прогресс каждые 5 секунд
+        # ДЕБАГ ИСТОРИИ каждые 5 секунд
         current_timestamp = time.time()
         if current_timestamp - self.last_history_debug > 5:
             self.last_history_debug = current_timestamp
@@ -168,7 +201,6 @@ class FeatureEngine:
             if self.price_history:
                 oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
             
-            # ДИАГНОСТИКА TARGET: проверяем почему не рассчитывается
             twenty_sec_ago = current_time - timedelta(seconds=20)
             eligible_for_target = 0
             already_has_target = 0
@@ -179,38 +211,37 @@ class FeatureEngine:
                         already_has_target += 1
             
             print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
-            print(f"🔍 Target diagnosis: {eligible_for_target} eligible, {already_has_target} already have target")
+            print(f"🔍 Target: {eligible_for_target} eligible, {already_has_target} have target")
             
-            # Показываем пример изменения цены для диагностики
             if len(self.price_history) >= 2:
                 oldest_price = self.price_history[0]['price']
                 newest_price = self.price_history[-1]['price']
                 total_change = (newest_price - oldest_price) / oldest_price * 100
-                print(f"💰 Price change overall: {total_change:.4f}% ({oldest_price} -> {newest_price})")
+                print(f"💰 Price change: {total_change:.4f}%")
         
-        # ОГРАНИЧЕНИЕ: добавляем в историю только если прошло достаточно времени
+        # Ограничение частоты добавления в историю
         if len(self.price_history) > 0:
             last_time = self.price_history[-1]['timestamp']
             time_diff = (current_time - last_time).total_seconds()
-            if time_diff < 0.5:  # Не чаще чем раз в 0.5 секунды
+            if time_diff < 0.5:
                 return None
         
-        # Сохраняем текущие данные
+        # Добавляем в историю
         self.price_history.append({
             'timestamp': current_time,
             'price': current_price,
             'features': features.copy()
         })
         
-        # Ограничиваем историю до 200 записей (УМЕНЬШЕНО для теста)
+        # Ограничиваем историю
         if len(self.price_history) > 200:
             self.price_history = self.price_history[-200:]
         
-        # РАСЧЕТ TARGET: для записей старше 20 секунд
+        # РАСЧЕТ TARGET для записей старше 20 секунд
         twenty_sec_ago = current_time - timedelta(seconds=20)
         
         targets_calculated = 0
-        for i, data_point in enumerate(self.price_history):
+        for data_point in self.price_history:
             if data_point['timestamp'] <= twenty_sec_ago:
                 if 'target' not in data_point['features']:
                     future_price = current_price
@@ -221,12 +252,11 @@ class FeatureEngine:
                     self.target_calculated_count += 1
                     targets_calculated += 1
                     
-                    # Логируем ВСЕ target расчеты для диагностики
                     price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                    print(f"🎯 TARGET CALCULATED: {target} (change: {price_change:.4f}%) - {current_price_at_time} -> {future_price}")
+                    print(f"🎯 TARGET: {target} (change: {price_change:.4f}%)")
         
         if targets_calculated > 0:
-            print(f"✅ Calculated {targets_calculated} new targets, total: {self.target_calculated_count}")
+            print(f"✅ Calculated {targets_calculated} targets, total: {self.target_calculated_count}")
             
             # Возвращаем последние фичи с target
             for data_point in reversed(self.price_history):
@@ -236,11 +266,9 @@ class FeatureEngine:
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи вместе (с ограничением частоты)"""
+        """Собирает все фичи вместе"""
         
-        # ОГРАНИЧЕНИЕ ЧАСТОТЫ: обновляем не чаще чем раз в секунду
         if not self.should_update_features():
-            # Возвращаем последние фичи вместо вычисления новых
             if self.price_history:
                 return self.price_history[-1]['features']
             else:
@@ -263,7 +291,6 @@ class FeatureEngine:
             'target': 0
         }
         
-        # Обновляем историю и получаем фичи с target (если есть)
         updated_features = self.update_price_history(current_price, features)
         if updated_features:
             return updated_features
@@ -271,7 +298,7 @@ class FeatureEngine:
         return features
     
     def create_empty_features(self):
-        """Создает пустые фичи когда обновление не нужно"""
+        """Создает пустые фичи"""
         return {
             'timestamp': datetime.now().isoformat(),
             'order_book_imbalance': 0.5,
