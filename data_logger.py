@@ -7,6 +7,8 @@ class DataLogger:
     def __init__(self):
         self.data_file = "data/training_data.csv"
         self.setup_data_file()
+        self.last_log_time = 0
+        self.log_interval = 30  # Логировать каждые 30 секунд
     
     def setup_data_file(self):
         """Создает файл данных с заголовками включая target"""
@@ -25,14 +27,21 @@ class DataLogger:
                     'sell_trades',
                     'total_trades',
                     'current_price',
-                    'target'  # -1/0/+1
+                    'target'
                 ])
+            print("📁 Created new training_data.csv")
     
     def log_features(self, features):
-        """Сохраняет фичи с target в CSV"""
+        """Сохраняет фичи в CSV КАЖДЫЕ 30 СЕКУНД"""
         try:
-            # Сохраняем только если есть target (не 0)
-            if features.get('target', 0) != 0:
+            current_time = time.time()
+            
+            # Логируем только каждые 30 секунд И если есть target
+            if (current_time - self.last_log_time >= self.log_interval and 
+                features.get('target', 0) != 0):
+                
+                self.last_log_time = current_time
+                
                 with open(self.data_file, 'a', newline='') as f:
                     writer = csv.writer(f)
                     writer.writerow([
@@ -48,6 +57,7 @@ class DataLogger:
                         features['target']
                     ])
                 print(f"💾 Data logged: target={features['target']}")
+                
         except Exception as e:
             print(f"❌ Data logging error: {e}")
 
