@@ -291,15 +291,16 @@ class FeatureEngine:
         if targets_calculated > 0:
             print(f"✅ Calculated {targets_calculated} targets")
             
-            # Возвращаем последние фичи с target
+            # 🔧 ИСПРАВЛЕНИЕ: Возвращаем ОБНОВЛЕННЫЕ фичи с target
             for data_point in reversed(self.price_history):
-                if 'target' in data_point['features']:
+                if 'target' in data_point['features'] and data_point['features']['target'] != 0:
+                    print(f"🚨 RETURNING TARGET: {data_point['features']['target']}")
                     return data_point['features']
         
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи с улучшенной валидацией"""
+        """Собирает все фичи с ИСПРАВЛЕННОЙ логикой возврата"""
         if not self.should_update_features():
             if self.price_history:
                 return self.price_history[-1]['features']
@@ -330,11 +331,14 @@ class FeatureEngine:
             'target': 0
         }
         
+        # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Сохраняем результат update_price_history
         updated_features = self.update_price_history(current_price, features)
-        if updated_features:
-            return updated_features
         
-        return features
+        # 🔧 ВОЗВРАЩАЕМ ОБНОВЛЕННЫЕ ФИЧИ С TARGET
+        if updated_features is not None:
+            return updated_features
+        else:
+            return features  # Если нет target, возвращаем исходные фичи
     
     def create_empty_features(self):
         """Создает пустые фичи"""
