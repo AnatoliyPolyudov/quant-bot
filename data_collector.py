@@ -29,7 +29,9 @@ class OKXDataCollector:
                 print(f"⚡ Event: {data['event']} - {data.get('msg', '')}")
             elif 'data' in data:
                 channel = data.get('arg', {}).get('channel', 'unknown')
-                print(f"📥 [{self.message_count}] {channel}: {len(data['data'])} items")
+                # Убираем частый вывод, оставляем только для отладки
+                if self.message_count % 100 == 0:
+                    print(f"📥 [{self.message_count}] {channel}: {len(data['data'])} items")
                 
                 # Сохраняем данные в соответствующие буферы
                 if channel == 'books':
@@ -39,15 +41,18 @@ class OKXDataCollector:
                 elif channel == 'tickers':
                     self.ticker_data = data['data']
                 
-                # Обновляем фичи и выводим каждые 10 сообщений
+                # Обновляем фичи и выводим каждые 30 секунд
                 self.update_and_print_features()
                 
         except Exception as e:
             print(f"❌ Message error: {e}")
     
     def update_and_print_features(self):
-        """Обновляет и выводит фичи каждые 10 сообщений"""
-        if self.message_count % 10 == 0:
+        """Обновляет и выводит фичи раз в 30 секунд"""
+        current_time = time.time()
+        if current_time - self.last_feature_print > 30:  # 30 секунд
+            self.last_feature_print = current_time
+            
             features = feature_engine.get_all_features(
                 self.order_book_data, 
                 self.trade_data, 
@@ -55,7 +60,7 @@ class OKXDataCollector:
             )
             
             print("\n" + "="*50)
-            print("🎯 REAL-TIME FEATURES:")
+            print("🎯 REAL-TIME FEATURES (30s update):")
             print(f"📊 Order Book Imbalance: {features['order_book_imbalance']:.3f}")
             print(f"📏 Spread: {features['spread_percent']:.4f}%")
             print(f"📈 Cumulative Delta: {features['cumulative_delta']:.4f}")
