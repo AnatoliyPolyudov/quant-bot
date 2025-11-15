@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 import time
 import numpy as np
-from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
+from config import config
 
 class FeatureEngine:
     def __init__(self):
@@ -14,10 +14,10 @@ class FeatureEngine:
         self.update_interval = 1
         self.last_history_debug = 0
         
-        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ
-        self.target_horizon = config.data.TARGET_HORIZON        # 8 секунд
-        self.target_threshold = config.data.TARGET_THRESHOLD    # 0.01%
-        self.volatility_window = config.data.VOLATILITY_WINDOW  # 30
+        # Используем конфигурацию
+        self.target_horizon = config.data.TARGET_HORIZON
+        self.target_threshold = config.data.TARGET_THRESHOLD
+        self.volatility_window = config.data.VOLATILITY_WINDOW
         
         self.trade_history = []
         self.ob_debug_shown = False
@@ -137,7 +137,6 @@ class FeatureEngine:
             if len(self.price_history) < 2:
                 return 0
                 
-            # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ
             prices = [dp['price'] for dp in self.price_history[-self.volatility_window:]]
             if len(prices) < 2:
                 return 0
@@ -203,10 +202,9 @@ class FeatureEngine:
             
         price_change = (future_price - current_price) / current_price * 100
         
-        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ
-        if price_change > self.target_threshold:    # 0.01%
+        if price_change > self.target_threshold:
             return 1
-        elif price_change < -self.target_threshold: # -0.01%
+        elif price_change < -self.target_threshold:
             return -1
         else:
             return 0
@@ -236,11 +234,11 @@ class FeatureEngine:
         }
         self.price_history.append(current_data_point)
         
-        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ ДЛЯ РАЗМЕРА ИСТОРИИ
+        # Ограничиваем размер истории для производительности
         if len(self.price_history) > config.data.FEATURE_WINDOW:
             self.price_history = self.price_history[-config.data.FEATURE_WINDOW:]
         
-        # Рассчитываем target для старых точек
+        # 🔧 РАССЧИТЫВАЕМ TARGET ДЛЯ СТАРЫХ ТОЧЕК
         targets_calculated = 0
         features_with_target = None
         
@@ -251,7 +249,6 @@ class FeatureEngine:
             # Вычисляем время, которое должно пройти для этого target
             time_passed = (current_time - old_data_point['timestamp']).total_seconds()
             
-            # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ ДЛЯ HORIZON
             if time_passed >= self.target_horizon:
                 # Используем текущую цену как будущую для расчета target
                 future_price = current_price
@@ -263,8 +260,8 @@ class FeatureEngine:
                 old_data_point['features']['target'] = target
                 targets_calculated += 1
                 
-                # Сохраняем последнюю точку с ненулевым target
-                if target != 0:
+                # 🔧 ВОЗВРАЩАЕМ ПЕРВУЮ ЖЕ ТОЧКУ С TARGET
+                if target != 0 and features_with_target is None:
                     features_with_target = old_data_point['features']
                 
                 # Логируем расчеты target
@@ -295,9 +292,14 @@ class FeatureEngine:
         return features_with_target
 
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи"""
+        """🔧 ИСПРАВЛЕННЫЙ МЕТОД: Всегда возвращает фичи с target если есть"""
         if not self.should_update_features():
             if self.price_history:
+                # 🔧 ВОЗВРАЩАЕМ ПОСЛЕДНИЕ ФИЧИ С TARGET
+                latest_features = self.price_history[-1]['features'].copy()
+                # Проверяем есть ли рассчитанный target
+                if 'target' in latest_features and latest_features['target'] != 0:
+                    return latest_features
                 return self.price_history[-1]['features']
             else:
                 return self.create_empty_features()
@@ -325,17 +327,23 @@ class FeatureEngine:
             'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
             'current_price': current_price,
             'volatility': volatility,
-            'target': 0  # Будет заполнено позже
+            'target': 0
         }
         
-        # Всегда обновляем историю и возвращаем актуальные фичи
+        # 🔧 ОБЯЗАТЕЛЬНО обновляем историю и возвращаем фичи С TARGET
         updated_features = self.update_price_history(current_price, features)
         
+        # 🔧 ЕСЛИ ЕСТЬ ФИЧИ С TARGET - ВОЗВРАЩАЕМ ИХ
         if updated_features is not None:
             return updated_features
-        else:
-            # Возвращаем текущие фичи, даже если target еще не рассчитан
-            return features
+        
+        # 🔧 ИНАЧЕ ИЩЕМ ЛЮБЫЕ ФИЧИ С TARGET В ИСТОРИИ
+        for data_point in reversed(self.price_history):
+            if 'target' in data_point['features'] and data_point['features']['target'] != 0:
+                return data_point['features']
+        
+        # 🔧 ЕСЛИ TARGET'ОВ НЕТ - ВОЗВРАЩАЕМ ТЕКУЩИЕ
+        return features
 
     def create_empty_features(self):
         """Создает пустые фичи"""
