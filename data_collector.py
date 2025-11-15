@@ -45,8 +45,13 @@ class OKXDataCollector:
         from config import CHANNELS
         for channel in CHANNELS:
             subscribe_msg = {
-                "op": "subscribe", 
-                "args": [{"channel": channel}]
+                "op": "subscribe",
+                "args": [
+                    {
+                        "channel": channel,
+                        "instId": "BTC-USDT-SWAP"
+                    }
+                ]
             }
             ws.send(json.dumps(subscribe_msg))
             print(f"📡 Subscribed to: {channel}")
