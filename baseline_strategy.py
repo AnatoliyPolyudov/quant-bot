@@ -1,28 +1,30 @@
 # baseline_strategy.py
 import numpy as np
 from datetime import datetime
+from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
 
 class BaselineStrategy:
     def __init__(self):
-        # 🔧 ОПТИМИЗИРОВАННЫЕ ПАРАМЕТРЫ
-        self.min_imbalance = 0.58      # 🔧 Оптимизировано
-        self.min_delta = 2             # 🔧 Оптимизировано  
-        self.max_spread = 0.025        # 🔧 Оптимизировано
-        self.max_volatility = 0.8      # 🔧 Оптимизировано
-        self.min_confidence = 60       # 🔧 НОВОЕ: минимальная уверенность
+        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ СТРАТЕГИИ
+        self.min_imbalance = config.strategy.BASELINE_MIN_IMBALANCE
+        self.min_delta = config.strategy.BASELINE_MIN_DELTA
+        self.max_spread = config.strategy.BASELINE_MAX_SPREAD
+        self.max_volatility = config.strategy.BASELINE_MAX_VOLATILITY
+        self.min_confidence = config.strategy.BASELINE_MIN_CONFIDENCE
         
-        # 🔧 НОВОЕ: Адаптивные параметры
+        # 🔧 ИСПОЛЬЗУЕМ ВЕСА ИЗ КОНФИГА
+        self.feature_weights = config.strategy.FEATURE_WEIGHTS
+        
+        # Адаптивные параметры
         self.recent_signals = []
-        self.market_regime = "NORMAL"  # NORMAL, VOLATILE, TRENDING
+        self.market_regime = "NORMAL"
         self.last_regime_update = 0
         
-        # 🔧 НОВОЕ: Веса для разных фич
-        self.feature_weights = {
-            'imbalance': 0.35,
-            'delta': 0.25, 
-            'spread': 0.15,
-            'volatility': 0.15,
-            'funding': 0.10
+        # 🔧 ИСПОЛЬЗУЕМ ПАРАМЕТРЫ РЫНОЧНЫХ РЕЖИМОВ ИЗ КОНФИГА
+        self.market_regime_params = {
+            "VOLATILE": config.strategy.VOLATILE_MARKET_PARAMS,
+            "TRENDING": config.strategy.TRENDING_MARKET_PARAMS,
+            "NORMAL": config.strategy.NORMAL_MARKET_PARAMS
         }
         
     def update_market_regime(self, features):
@@ -44,19 +46,11 @@ class BaselineStrategy:
         else:
             self.market_regime = "NORMAL"
             
-        # 🔧 Адаптируем параметры под режим
-        if self.market_regime == "VOLATILE":
-            self.min_imbalance = 0.62      # Более строгие условия
-            self.min_delta = 3
-            self.max_volatility = 0.6
-        elif self.market_regime == "TRENDING":
-            self.min_imbalance = 0.56      # Более чувствительные
-            self.min_delta = 1
-            self.max_volatility = 1.0
-        else:
-            self.min_imbalance = 0.58      # Нормальные условия
-            self.min_delta = 2
-            self.max_volatility = 0.8
+        # 🔧 АДАПТИРУЕМ ПАРАМЕТРЫ ПОД РЕЖИМ ИЗ КОНФИГА
+        regime_params = self.market_regime_params.get(self.market_regime, {})
+        self.min_imbalance = regime_params.get('min_imbalance', self.min_imbalance)
+        self.min_delta = regime_params.get('min_delta', self.min_delta)
+        self.max_volatility = regime_params.get('max_volatility', self.max_volatility)
     
     def calculate_composite_score(self, features):
         """Рассчитывает композитный скоринг на основе всех фич"""
@@ -66,14 +60,14 @@ class BaselineStrategy:
         volatility = features.get('volatility', 0)
         funding = features.get('funding_rate', 0)
         
-        # 🔧 Нормализуем фичи для скоринга
+        # Нормализуем фичи для скоринга
         imbalance_score = max(0, (imbalance - 0.5) / 0.5)  # -1 to 1
         delta_score = np.tanh(delta / 10)  # Нормализуем дельту
         spread_score = max(0, 1 - (spread / self.max_spread))  # 0 to 1
         volatility_score = max(0, 1 - (volatility / self.max_volatility))  # 0 to 1
         funding_score = -np.tanh(funding * 1000)  # Отрицательный funding = хорошо
         
-        # 🔧 Взвешенная сумма
+        # 🔧 ИСПОЛЬЗУЕМ ВЗВЕШЕННУЮ СУММУ ИЗ КОНФИГА
         composite = (
             imbalance_score * self.feature_weights['imbalance'] +
             delta_score * self.feature_weights['delta'] +
@@ -91,7 +85,7 @@ class BaselineStrategy:
         }
     
     def analyze_momentum(self, features):
-        """🔧 НОВОЕ: Анализ моментаum на основе нескольких сигналов"""
+        """Анализ моментаum на основе нескольких сигналов"""
         imbalance = features.get('order_book_imbalance', 0.5)
         delta = features.get('cumulative_delta', 0)
         
@@ -123,7 +117,7 @@ class BaselineStrategy:
     
     def analyze_signal(self, features):
         """Улучшенный анализ сигналов с композитным скорингом"""
-        # 🔧 НОВОЕ: Обновляем рыночный режим
+        # Обновляем рыночный режим
         self.update_market_regime(features)
         
         imbalance = features.get('order_book_imbalance', 0.5)
@@ -135,11 +129,11 @@ class BaselineStrategy:
         signals = []
         warning_signals = []
         
-        # 🔧 НОВОЕ: Композитный скоринг
+        # Композитный скоринг
         composite_score, score_details = self.calculate_composite_score(features)
         momentum_score, momentum_signals = self.analyze_momentum(features)
         
-        # 🔧 УЛУЧШЕННЫЕ ПРАВИЛА С СИГНАЛАМИ РАЗНОЙ СИЛЫ
+        # 🔧 УЛУЧШЕННЫЕ ПРАВИЛА С ИСПОЛЬЗОВАНИЕМ КОНФИГА
         
         # Правило 1: Imbalance с градацией
         if imbalance > 0.65:
@@ -183,13 +177,13 @@ class BaselineStrategy:
         else:
             signals.append("💰 Funding {:.6f}".format(funding))
         
-        # 🔧 НОВОЕ: Добавляем momentum сигналы
+        # Добавляем momentum сигналы
         signals.extend(momentum_signals)
         
-        # 🔧 НОВОЕ: Информация о рыночном режиме
+        # Информация о рыночном режиме
         signals.append("🎪 Режим: {}".format(self.market_regime))
         
-        # 🔧 УЛУЧШЕННОЕ ПРИНЯТИЕ РЕШЕНИЙ
+        # 🔧 УЛУЧШЕННОЕ ПРИНЯТИЕ РЕШЕНИЙ С КОНФИГОМ
         base_buy_signal = (imbalance > self.min_imbalance and 
                           delta > self.min_delta and 
                           spread < self.max_spread and
@@ -200,11 +194,11 @@ class BaselineStrategy:
                            spread < self.max_spread and
                            volatility < self.max_volatility)
         
-        # 🔧 НОВОЕ: Усиленные сигналы
+        # Усиленные сигналы
         strong_buy_signal = (imbalance > 0.65 or delta > 5) and base_buy_signal
         strong_sell_signal = (imbalance < 0.35 or delta < -5) and base_sell_signal
         
-        # 🔧 НОВОЕ: Композитное решение
+        # Композитное решение
         if composite_score > 0.1 and base_buy_signal:
             decision = "LONG"
             confidence = self.calculate_confidence(composite_score, momentum_score, features, warning_signals)
@@ -215,7 +209,7 @@ class BaselineStrategy:
             decision = "HOLD"
             confidence = 0
         
-        # 🔧 НОВОЕ: Усиливаем уверенность для сильных сигналов
+        # Усиливаем уверенность для сильных сигналов
         if strong_buy_signal and decision == "LONG":
             confidence = min(95, confidence + 15)
             signals.append("💪 УСИЛЕННЫЙ LONG сигнал")
@@ -223,12 +217,12 @@ class BaselineStrategy:
             confidence = min(95, confidence + 15)
             signals.append("💪 УСИЛЕННЫЙ SHORT сигнал")
         
-        # 🔧 НОВОЕ: Учитываем предупреждения
+        # Учитываем предупреждения
         if warning_signals:
             confidence = max(0, confidence - len(warning_signals) * 10)
             signals.extend(warning_signals)
         
-        # 🔧 НОВОЕ: Минимальная уверенность
+        # 🔧 ИСПОЛЬЗУЕМ МИНИМАЛЬНУЮ УВЕРЕННОСТЬ ИЗ КОНФИГА
         if confidence < self.min_confidence and decision != "HOLD":
             decision = "HOLD"
             confidence = 0
@@ -249,7 +243,7 @@ class BaselineStrategy:
         }
     
     def calculate_confidence(self, composite_score, momentum_score, features, warning_signals):
-        """🔧 НОВОЕ: Улучшенный расчет уверенности"""
+        """Улучшенный расчет уверенности"""
         base_confidence = composite_score * 100
         
         # Бонус за momentum
