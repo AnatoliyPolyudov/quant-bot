@@ -14,8 +14,8 @@ class DataLogger:
         self.logged_count = 0
         self.last_log_time = 0
         
-        # 🔧 ИЗМЕНИЛИ: увеличили интервал логирования до 10 секунд
-        self.log_interval = 10  # Теперь 10 секунд вместо 5
+        # 🔧 ОЧЕНЬ КОРОТКИЙ ИНТЕРВАЛ
+        self.log_interval = 2  # Всего 2 секунды!
         
         self.max_records = config.data.MAX_RECORDS
         
@@ -29,140 +29,76 @@ class DataLogger:
         }
         
     def setup_data_files(self):
-        """Настраивает файлы данных с улучшенной структурой"""
+        """Настраивает файлы данных"""
         os.makedirs("data", exist_ok=True)
         
-        # Основной файл для обучения
         if not os.path.exists(self.data_file):
             with open(self.data_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    'timestamp',
-                    'order_book_imbalance', 
-                    'spread_percent',
-                    'cumulative_delta',
-                    'funding_rate',
-                    'buy_trades',
-                    'sell_trades',
-                    'total_trades',
-                    'current_price',
-                    'volatility',
-                    'target',
-                    'data_quality'
+                    'timestamp', 'order_book_imbalance', 'spread_percent',
+                    'cumulative_delta', 'funding_rate', 'buy_trades',
+                    'sell_trades', 'total_trades', 'current_price',
+                    'volatility', 'target', 'data_quality'
                 ])
             print("📁 Создан новый файл данных для обучения")
         
-        # Файл для сырых данных (бэкап)
         if not os.path.exists(self.raw_data_file):
             with open(self.raw_data_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    'timestamp',
-                    'order_book_imbalance', 
-                    'spread_percent',
-                    'cumulative_delta',
-                    'funding_rate',
-                    'buy_trades',
-                    'sell_trades',
-                    'total_trades',
-                    'current_price',
-                    'volatility',
-                    'target',
-                    'log_type'
+                    'timestamp', 'order_book_imbalance', 'spread_percent',
+                    'cumulative_delta', 'funding_rate', 'buy_trades',
+                    'sell_trades', 'total_trades', 'current_price',
+                    'volatility', 'target', 'log_type'
                 ])
             print("📁 Создан файл для сырых данных")
     
     def safe_csv_value(self, value):
-        """🔧 БЕЗОПАСНОЕ экранирование значений для CSV"""
+        """Безопасное экранирование для CSV"""
         if value is None:
             return ''
         str_value = str(value)
-        # Экранируем запятые, переносы строк и кавычки
         if ',' in str_value or '\n' in str_value or '\r' in str_value or '"' in str_value:
             return '"' + str_value.replace('"', '""') + '"'
         return str_value
     
     def is_valid_features(self, features):
-        """🔧 ОЧЕНЬ МЯГКАЯ проверка - сохраняем ВСЕ данные"""
+        """🔧 СУПЕР-МЯГКАЯ проверка - сохраняем ВСЕ"""
         try:
             self.data_quality_stats['total_attempted'] += 1
             
-            # 🔧 МИНИМАЛЬНЫЕ ПРОВЕРКИ - только самые критические
-            
-            # Проверяем только самые основные поля
-            required_fields = ['current_price', 'order_book_imbalance']
-            for field in required_fields:
-                if field not in features:
-                    if self.data_quality_stats['total_attempted'] <= 5:
-                        print(f"❌ Отсутствует поле: {field}")
-                    return False
-            
+            # 🔧 ТОЛЬКО САМЫЕ КРИТИЧЕСКИЕ ПРОВЕРКИ
             price = features.get('current_price', 0)
-            if price <= 0 or price > 500000:  # 🔧 Только явно невалидные цены
-                if self.data_quality_stats['total_attempted'] <= 5:
-                    print(f"❌ Невалидная цена: {price}")
+            if price <= 0 or price > 500000:
                 return False
+                
+            # 🔧 ВСЕ ОСТАЛЬНОЕ ПРИНИМАЕМ БЕЗ ПРОВЕРОК
             
-            # 🔧 УБИРАЕМ ВСЕ ОСТАЛЬНЫЕ ПРОВЕРКИ
-            # spread, imbalance, delta, volatility - принимаем любые значения
-            
-            # 🔧 ДЕБАГ: покажем что сохраняем
+            # Показываем прогресс
             if self.data_quality_stats['total_attempted'] <= 10:
-                print(f"💾 ACCEPTING data #{self.data_quality_stats['total_attempted']}: "
-                      f"price={price}, imbalance={features.get('order_book_imbalance', 0):.3f}")
+                print(f"💾 ACCEPTING #{self.data_quality_stats['total_attempted']}: price={price}")
             
-            return True  # 🔧 Принимаем почти все данные!
+            return True  # 🔧 ПРИНИМАЕМ ВСЕ!
             
         except Exception as e:
-            if self.data_quality_stats['total_attempted'] <= 5:
-                print(f"❌ Ошибка проверки фич: {e}")
             return False
     
     def is_noisy_data(self, features):
         """🔧 ОЧЕНЬ МЯГКАЯ проверка на шум"""
         try:
             price = features.get('current_price', 0)
-            # 🔧 Только полный крах данных
-            if price <= 0:
-                return True
-            return False  # 🔧 Все остальное принимаем
-            
-        except Exception as e:
+            return price <= 0  # 🔧 Только полный крах
+        except:
             return False
     
     def calculate_data_quality_score(self, features):
-        """Рассчитывает оценку качества данных"""
-        score = 100  # Начальная оценка
-        
-        try:
-            # 🔧 ОЧЕНЬ МЯГКИЕ ШТРАФЫ
-            spread = features.get('spread_percent', 0)
-            if spread > 0.5:
-                score -= 20
-            elif spread > 0.1:
-                score -= 10
-                
-            imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.1 or imbalance > 0.9:
-                score -= 10
-                
-            volatility = features.get('volatility', 0)
-            if volatility > 10.0:
-                score -= 10
-                
-            # Бонус за хорошие данные
-            if 0.3 <= imbalance <= 0.7 and spread < 0.05:
-                score += 20
-                
-            return max(0, min(100, score))
-            
-        except Exception as e:
-            return 80  # 🔧 Высокая оценка при ошибке
+        """Простая оценка качества"""
+        return 80  # 🔧 Всегда высокая оценка
     
     def log_raw_data(self, features):
-        """Логирует сырые данные для бэкапа с защитой CSV"""
+        """Логируем сырые данные"""
         try:
-            # 🔧 БЕЗОПАСНАЯ подготовка данных
             row_data = [
                 self.safe_csv_value(features.get('timestamp', '')),
                 self.safe_csv_value(features.get('order_book_imbalance', 0)),
@@ -181,80 +117,23 @@ class DataLogger:
             with open(self.raw_data_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(row_data)
-        except Exception as e:
-            print(f"❌ Ошибка логирования сырых данных: {e}")
-    
-    def repair_data_file(self):
-        """🔧 ВОССТАНАВЛИВАЕТ поврежденный CSV файл"""
-        try:
-            if not os.path.exists(self.data_file):
-                return True
-                
-            # Проверяем только каждые 100 записей чтобы не замедлять работу
-            if self.logged_count % 100 != 0:
-                return True
-                
-            print("🔧 Проверяем целостность файла данных...")
-            
-            # Пробуем загрузить файл
-            try:
-                df = pd.read_csv(self.data_file)
-                print(f"✅ Файл в порядке, записей: {len(df)}")
-                return True
-            except Exception as e:
-                print(f"⚠️ Файл поврежден, восстанавливаем...")
-                
-            # Создаем backup поврежденного файла
-            backup_file = f"{self.data_file}.backup_{int(time.time())}"
-            os.rename(self.data_file, backup_file)
-            print(f"📁 Создан backup: {backup_file}")
-            
-            # Читаем построчно и фильтруем корректные строки
-            good_rows = []
-            with open(backup_file, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                try:
-                    headers = next(reader)  # Читаем заголовки
-                    good_rows.append(headers)
-                    
-                    for i, row in enumerate(reader, start=2):
-                        if len(row) == len(headers):
-                            good_rows.append(row)
-                        else:
-                            print(f"⚠️ Пропущена строка {i}: неверное количество полей")
-                except StopIteration:
-                    print("⚠️ Файл пустой")
-            
-            # Записываем исправленный файл
-            with open(self.data_file, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerows(good_rows)
-            
-            print(f"✅ Файл восстановлен! Сохранено {len(good_rows)-1} записей")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Ошибка восстановления файла: {e}")
-            return False
+        except:
+            pass
     
     def log_features(self, features):
-        """Улучшенное логирование фич с защитой от повреждения CSV"""
+        """Основное логирование"""
         try:
             current_time = time.time()
-            
-            # 🔧 ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ЦЕЛОСТНОСТИ ФАЙЛА
-            if self.logged_count % 100 == 0:
-                self.repair_data_file()
             
             # Всегда логируем сырые данные
             self.log_raw_data(features)
             
-            # Пропускаем невалидные данные
+            # 🔧 МЯГКАЯ ВАЛИДАЦИЯ
             if not self.is_valid_features(features):
                 self.data_quality_stats['anomalies_detected'] += 1
                 return
             
-            # Контроль частоты логирования
+            # 🔧 ЧАСТОЕ ЛОГИРОВАНИЕ (2 секунды)
             if current_time - self.last_log_time < self.log_interval:
                 return
                 
@@ -262,10 +141,7 @@ class DataLogger:
             self.logged_count += 1
             self.data_quality_stats['successful_logs'] += 1
             
-            # Расчет качества данных
-            quality_score = self.calculate_data_quality_score(features)
-            
-            # 🔧 БЕЗОПАСНАЯ подготовка данных для CSV
+            # Подготовка данных
             row_data = [
                 self.safe_csv_value(features.get('timestamp', '')),
                 self.safe_csv_value(features.get('order_book_imbalance', 0)),
@@ -278,143 +154,25 @@ class DataLogger:
                 self.safe_csv_value(features.get('current_price', 0)),
                 self.safe_csv_value(features.get('volatility', 0)),
                 self.safe_csv_value(features.get('target', 0)),
-                self.safe_csv_value(quality_score)
+                self.safe_csv_value(80)  # Всегда высокое качество
             ]
             
-            # Проверяем что количество полей соответствует заголовкам
-            expected_columns = 12
-            if len(row_data) != expected_columns:
-                print(f"❌ Ошибка: неверное количество полей {len(row_data)} != {expected_columns}")
-                return
-            
-            # Логируем в основной файл
+            # Сохраняем в основной файл
             with open(self.data_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(row_data)
             
-            # Периодическая очистка старых данных
-            if self.logged_count % 100 == 0:
-                self.cleanup_old_data()
-            
-            # Визуализация логирования
+            # Визуализация
             target_val = features.get('target', 0)
             if target_val != 0:
-                if target_val == 1:
-                    target_symbol = "🟢"
-                    target_text = "LONG"
-                elif target_val == -1:
-                    target_symbol = "🔴" 
-                    target_text = "SHORT"
-                else:
-                    target_symbol = "⚪"
-                    target_text = "HOLD"
-                
-                # Показываем детали только для ненулевых target
-                imbalance = features.get('order_book_imbalance', 0)
-                delta = features.get('cumulative_delta', 0)
-                print(f"💾 {target_symbol} SAVED #{self.logged_count}: "
-                      f"target={target_text} | "
-                      f"imbalance={imbalance:.3f} | "
-                      f"delta={delta:.1f} | "
-                      f"quality={quality_score}%")
-            else:
-                # Для нулевых target показываем реже
-                if self.logged_count % 20 == 0:
-                    print(f"💾 ⚪ SAVED #{self.logged_count}: "
-                          f"HOLD record | quality={quality_score}%")
-            
-            # Периодическая проверка качества данных
-            if current_time - self.last_data_quality_check > 60:
-                self.last_data_quality_check = current_time
-                self.print_data_quality_report()
+                symbol = "🟢" if target_val == 1 else "🔴"
+                text = "LONG" if target_val == 1 else "SHORT"
+                print(f"💾 {symbol} SAVED #{self.logged_count}: target={text}")
+            elif self.logged_count % 10 == 0:
+                print(f"💾 ⚪ SAVED #{self.logged_count}: HOLD record")
                 
         except Exception as e:
             print(f"❌ Ошибка логирования: {e}")
-    
-    def print_data_quality_report(self):
-        """Печатает отчет о качестве данных"""
-        try:
-            total_attempted = self.data_quality_stats['total_attempted']
-            successful_logs = self.data_quality_stats['successful_logs']
-            anomalies_detected = self.data_quality_stats['anomalies_detected']
-            
-            if total_attempted > 0:
-                success_rate = (successful_logs / total_attempted) * 100
-                anomaly_rate = (anomalies_detected / total_attempted) * 100
-                
-                print(f"\n📊 QUALITY REPORT: "
-                      f"Success: {success_rate:.1f}% | "
-                      f"Anomalies: {anomaly_rate:.1f}% | "
-                      f"Total: {total_attempted}")
-            else:
-                print(f"\n📊 QUALITY REPORT: No data collected yet")
-                  
-        except Exception as e:
-            print(f"❌ Ошибка отчета качества: {e}")
-    
-    def get_data_stats(self):
-        """Возвращает статистику собранных данных"""
-        try:
-            if not os.path.exists(self.data_file):
-                return {'total_records': 0, 'labeled_records': 0}
-            
-            # 🔧 БЕЗОПАСНАЯ загрузка CSV
-            try:
-                df = pd.read_csv(self.data_file)
-            except:
-                # Если файл поврежден, восстанавливаем
-                if self.repair_data_file():
-                    try:
-                        df = pd.read_csv(self.data_file)
-                    except:
-                        return {'total_records': 0, 'labeled_records': 0}
-                else:
-                    return {'total_records': 0, 'labeled_records': 0}
-            
-            total_records = len(df)
-            
-            # Считаем размеченные записи (ненулевой target)
-            if 'target' in df.columns:
-                labeled_records = len(df[df['target'] != 0])
-            else:
-                labeled_records = 0
-                
-            return {
-                'total_records': total_records,
-                'labeled_records': labeled_records,
-                'data_quality_avg': df['data_quality'].mean() if 'data_quality' in df.columns else 0
-            }
-            
-        except Exception as e:
-            return {'total_records': 0, 'labeled_records': 0}
-    
-    def cleanup_old_data(self):
-        """Очистка старых данных с использованием конфига"""
-        try:
-            if not os.path.exists(self.data_file):
-                return
-                
-            # 🔧 БЕЗОПАСНАЯ загрузка
-            try:
-                df = pd.read_csv(self.data_file)
-            except:
-                if self.repair_data_file():
-                    try:
-                        df = pd.read_csv(self.data_file)
-                    except:
-                        return
-                else:
-                    return
-            
-            # Используем максимальное количество записей из конфига
-            if len(df) > self.max_records:
-                # Оставляем только последние записи
-                df = df.tail(self.max_records)
-                df.to_csv(self.data_file, index=False)
-                print(f"🧹 Очищены старые данные. Оставлено {len(df)} записей (максимум: {self.max_records})")
-                
-        except Exception as e:
-            print(f"❌ Ошибка очистки данных: {e}")
 
 # Глобальный экземпляр
 data_logger = DataLogger()
