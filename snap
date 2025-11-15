@@ -616,7 +616,26 @@ class FeatureEngine:
             oldest_age = 0
             if self.price_history:
                 oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
+            
+            # ДИАГНОСТИКА TARGET: проверяем почему не рассчитывается
+            twenty_sec_ago = current_time - timedelta(seconds=20)
+            eligible_for_target = 0
+            already_has_target = 0
+            for data_point in self.price_history:
+                if data_point['timestamp'] <= twenty_sec_ago:
+                    eligible_for_target += 1
+                    if 'target' in data_point['features']:
+                        already_has_target += 1
+            
             print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
+            print(f"🔍 Target diagnosis: {eligible_for_target} eligible, {already_has_target} already have target")
+            
+            # Показываем пример изменения цены для диагностики
+            if len(self.price_history) >= 2:
+                oldest_price = self.price_history[0]['price']
+                newest_price = self.price_history[-1]['price']
+                total_change = (newest_price - oldest_price) / oldest_price * 100
+                print(f"💰 Price change overall: {total_change:.4f}% ({oldest_price} -> {newest_price})")
         
         # ОГРАНИЧЕНИЕ: добавляем в историю только если прошло достаточно времени
         if len(self.price_history) > 0:
@@ -632,30 +651,28 @@ class FeatureEngine:
             'features': features.copy()
         })
         
-        # Ограничиваем историю до 500 записей (вместо 1000)
-        if len(self.price_history) > 500:
-            self.price_history = self.price_history[-500:]
+        # Ограничиваем историю до 200 записей (УМЕНЬШЕНО для теста)
+        if len(self.price_history) > 200:
+            self.price_history = self.price_history[-200:]
         
         # РАСЧЕТ TARGET: для записей старше 20 секунд
         twenty_sec_ago = current_time - timedelta(seconds=20)
         
         targets_calculated = 0
         for i, data_point in enumerate(self.price_history):
-            if (data_point['timestamp'] <= twenty_sec_ago and 
-                'target' not in data_point['features']):
-                
-                future_price = current_price
-                current_price_at_time = data_point['price']
-                
-                target = self.calculate_target(current_price_at_time, future_price)
-                data_point['features']['target'] = target
-                self.target_calculated_count += 1
-                targets_calculated += 1
-                
-                # Логируем только значимые target
-                if target != 0:
+            if data_point['timestamp'] <= twenty_sec_ago:
+                if 'target' not in data_point['features']:
+                    future_price = current_price
+                    current_price_at_time = data_point['price']
+                    
+                    target = self.calculate_target(current_price_at_time, future_price)
+                    data_point['features']['target'] = target
+                    self.target_calculated_count += 1
+                    targets_calculated += 1
+                    
+                    # Логируем ВСЕ target расчеты для диагностики
                     price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                    print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
+                    print(f"🎯 TARGET CALCULATED: {target} (change: {price_change:.4f}%) - {current_price_at_time} -> {future_price}")
         
         if targets_calculated > 0:
             print(f"✅ Calculated {targets_calculated} new targets, total: {self.target_calculated_count}")
