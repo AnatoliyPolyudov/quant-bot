@@ -1,11 +1,9 @@
 # feature_engine.py
-import pandas as pd
 from datetime import datetime
 
 class FeatureEngine:
     def __init__(self):
         self.cumulative_delta = 0
-        self.last_trade_time = None
         self.trade_counts = {'buy': 0, 'sell': 0}
         
     def calculate_order_book_imbalance(self, order_book_data):
@@ -59,18 +57,14 @@ class FeatureEngine:
                 return self.cumulative_delta
                 
             for trade in trade_data:
-                # Определяем сторону (buy/sell) по цене относительно mid price
+                # OKX передает сторону в поле 'side'
                 if 'side' in trade:
-                    # Если в данных есть явное указание стороны
                     if trade['side'] == 'buy':
                         self.cumulative_delta += float(trade.get('sz', 0))
                         self.trade_counts['buy'] += 1
                     elif trade['side'] == 'sell':
                         self.cumulative_delta -= float(trade.get('sz', 0))
                         self.trade_counts['sell'] += 1
-                else:
-                    # Эвристика: если цена ближе к ask - buy, к bid - sell
-                    pass
                     
             return self.cumulative_delta
             
@@ -94,6 +88,9 @@ class FeatureEngine:
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
         """Собирает все фичи вместе"""
+        # Обновляем cumulative delta
+        self.update_cumulative_delta(trade_data)
+        
         features = {
             'timestamp': datetime.now().isoformat(),
             'order_book_imbalance': self.calculate_order_book_imbalance(order_book_data),
