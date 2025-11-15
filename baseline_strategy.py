@@ -3,7 +3,7 @@ class BaselineStrategy:
     def __init__(self):
         self.min_imbalance = 0.6
         self.min_delta = 10
-        self.max_spread = 0.05
+        self.max_spread = 0.02  # УВЕЛИЧЕНО до 0.02% (было 0.05%)
         
     def analyze_signal(self, features):
         """Анализирует фичи и возвращает торговый сигнал"""
