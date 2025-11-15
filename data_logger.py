@@ -14,8 +14,9 @@ class DataLogger:
         self.logged_count = 0
         self.last_log_time = 0
         
-        # Используем конфигурацию для интервалов
-        self.log_interval = config.data.LOG_INTERVAL
+        # 🔧 ИЗМЕНИЛИ: увеличили интервал логирования до 10 секунд
+        self.log_interval = 10  # Теперь 10 секунд вместо 5
+        
         self.max_records = config.data.MAX_RECORDS
         
         self.anomaly_count = 0
