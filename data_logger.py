@@ -4,15 +4,20 @@ import os
 import time
 from datetime import datetime
 import pandas as pd
+from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
 
 class DataLogger:
     def __init__(self):
         self.data_file = "data/training_data.csv"
-        self.raw_data_file = "data/raw_data_backup.csv"  # 🔧 НОВОЕ: бэкап сырых данных
+        self.raw_data_file = "data/raw_data_backup.csv"
         self.setup_data_files()
         self.logged_count = 0
         self.last_log_time = 0
-        self.log_interval = 5  # 🔧 Увеличено для уменьшения шума
+        
+        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ ДЛЯ ИНТЕРВАЛОВ
+        self.log_interval = config.data.LOG_INTERVAL
+        self.max_records = config.data.MAX_RECORDS
+        
         self.anomaly_count = 0
         self.last_data_quality_check = 0
         self.data_quality_stats = {
@@ -42,11 +47,11 @@ class DataLogger:
                     'current_price',
                     'volatility',
                     'target',
-                    'data_quality'  # 🔧 НОВОЕ: метка качества данных
+                    'data_quality'
                 ])
             print("📁 Создан новый файл данных для обучения")
         
-        # 🔧 НОВОЕ: Файл для сырых данных (бэкап)
+        # Файл для сырых данных (бэкап)
         if not os.path.exists(self.raw_data_file):
             with open(self.raw_data_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -62,7 +67,7 @@ class DataLogger:
                     'current_price',
                     'volatility',
                     'target',
-                    'log_type'  # 'raw' или 'processed'
+                    'log_type'
                 ])
             print("📁 Создан файл для сырых данных")
     
@@ -79,26 +84,26 @@ class DataLogger:
             
             # Проверяем диапазоны значений
             spread = features.get('spread_percent', 0)
-            if spread > 1.0 or spread < 0:  # 🔧 Более строгая проверка
+            if spread > 1.0 or spread < 0:
                 return False
             
             imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.1 or imbalance > 0.9:  # 🔧 Более узкий диапазон
+            if imbalance < 0.1 or imbalance > 0.9:
                 return False
             
             price = features.get('current_price', 0)
-            if price < 10000 or price > 100000:  # 🔧 Актуальный диапазон для BTC
+            if price < 10000 or price > 100000:
                 return False
             
             delta = abs(features.get('cumulative_delta', 0))
-            if delta > 5000:  # 🔧 Более реалистичный предел
+            if delta > 5000:
                 return False
             
             volatility = features.get('volatility', 0)
-            if volatility < 0 or volatility > 10:  # 🔧 Проверка волатильности
+            if volatility < 0 or volatility > 10:
                 return False
             
-            # 🔧 НОВОЕ: Проверка на зашумленность данных
+            # Проверка на зашумленность данных
             if self.is_noisy_data(features):
                 return False
                 
@@ -157,7 +162,7 @@ class DataLogger:
             return 0
     
     def log_raw_data(self, features):
-        """🔧 НОВОЕ: Логирует сырые данные для бэкапа"""
+        """Логирует сырые данные для бэкапа"""
         try:
             with open(self.raw_data_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -173,7 +178,7 @@ class DataLogger:
                     features.get('current_price', 0),
                     features.get('volatility', 0),
                     features.get('target', 0),
-                    'raw'  # Тип записи
+                    'raw'
                 ])
         except Exception as e:
             pass  # Молча игнорируем ошибки бэкапа
@@ -183,7 +188,7 @@ class DataLogger:
         try:
             current_time = time.time()
             
-            # 🔧 НОВОЕ: Всегда логируем сырые данные
+            # Всегда логируем сырые данные
             self.log_raw_data(features)
             
             # Пропускаем невалидные данные
@@ -191,7 +196,7 @@ class DataLogger:
                 self.data_quality_stats['anomalies_detected'] += 1
                 return
             
-            # Контроль частоты логирования
+            # 🔧 ИСПОЛЬЗУЕМ ИНТЕРВАЛ ИЗ КОНФИГА
             if current_time - self.last_log_time < self.log_interval:
                 return
                 
@@ -199,7 +204,7 @@ class DataLogger:
             self.logged_count += 1
             self.data_quality_stats['successful_logs'] += 1
             
-            # 🔧 НОВОЕ: Расчет качества данных
+            # Расчет качества данных
             quality_score = self.calculate_data_quality_score(features)
             
             # Логируем в основной файл
@@ -217,10 +222,14 @@ class DataLogger:
                     features.get('current_price', 0),
                     features.get('volatility', 0),
                     features.get('target', 0),
-                    quality_score  # 🔧 НОВОЕ: оценка качества
+                    quality_score
                 ])
             
-            # 🔧 УЛУЧШЕННОЕ: Визуализация логирования
+            # 🔧 ПЕРИОДИЧЕСКАЯ ОЧИСТКА СТАРЫХ ДАННЫХ
+            if self.logged_count % 100 == 0:
+                self.cleanup_old_data()
+            
+            # Визуализация логирования
             target_val = features.get('target', 0)
             if target_val != 0:
                 if target_val == 1:
@@ -247,8 +256,8 @@ class DataLogger:
                     print(f"💾 ⚪ SAVED #{self.logged_count}: "
                           f"HOLD record | quality={quality_score}%")
             
-            # 🔧 НОВОЕ: Периодическая проверка качества данных
-            if current_time - self.last_data_quality_check > 60:  # Каждую минуту
+            # Периодическая проверка качества данных
+            if current_time - self.last_data_quality_check > 60:
                 self.last_data_quality_check = current_time
                 self.print_data_quality_report()
                 
@@ -295,18 +304,20 @@ class DataLogger:
         except Exception as e:
             return {'total_records': 0, 'labeled_records': 0}
     
-    def cleanup_old_data(self, max_records=10000):
-        """🔧 НОВОЕ: Очистка старых данных для управления размером файла"""
+    def cleanup_old_data(self):
+        """🔧 Очистка старых данных с использованием конфига"""
         try:
             if not os.path.exists(self.data_file):
                 return
                 
             df = pd.read_csv(self.data_file)
-            if len(df) > max_records:
+            
+            # 🔧 ИСПОЛЬЗУЕМ МАКСИМАЛЬНОЕ КОЛИЧЕСТВО ЗАПИСЕЙ ИЗ КОНФИГА
+            if len(df) > self.max_records:
                 # Оставляем только последние записи
-                df = df.tail(max_records)
+                df = df.tail(self.max_records)
                 df.to_csv(self.data_file, index=False)
-                print(f"🧹 Очищены старые данные. Оставлено {len(df)} записей")
+                print(f"🧹 Очищены старые данные. Оставлено {len(df)} записей (максимум: {self.max_records})")
                 
         except Exception as e:
             print(f"❌ Ошибка очистки данных: {e}")
