@@ -13,7 +13,7 @@ class FeatureEngine:
         self.update_interval = 1
         self.last_history_debug = 0
         self.target_horizon = 20  # секунд для target
-        self.target_threshold = 0.05  # 0.05% вместо 0.005%
+        self.target_threshold = 0.02  
         self.delta_window = []  # Rolling window для delta
         self.max_delta_window = 100  # ~30 секунд истории
         
