@@ -8,6 +8,7 @@ import ssl
 from feature_engine import feature_engine
 from data_logger import data_logger
 from baseline_strategy import baseline_strategy
+from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
 
 class OKXDataCollector:
     def __init__(self):
@@ -18,14 +19,14 @@ class OKXDataCollector:
         self.last_data_log = 0
         self.connection_start_time = 0
         self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 10
+        self.max_reconnect_attempts = config.data.RECONNECT_ATTEMPTS  # 🔧 ИСПОЛЬЗУЕМ КОНФИГ
         
         # Раздельные буферы для разных типов данных
         self.order_book_data = []
         self.trade_data = []
         self.ticker_data = []
         
-        # 🔧 НОВОЕ: Статистика сбора данных
+        # Статистика сбора данных
         self.stats = {
             'messages_received': 0,
             'features_processed': 0,
@@ -34,7 +35,7 @@ class OKXDataCollector:
             'data_quality_issues': 0
         }
         
-        # 🔧 НОВОЕ: Время последнего обновления по типам данных
+        # Время последнего обновления по типам данных
         self.last_update_time = {
             'order_book': 0,
             'trades': 0,
@@ -48,7 +49,7 @@ class OKXDataCollector:
             self.message_count += 1
             self.stats['messages_received'] += 1
             
-            # 🔧 НОВОЕ: Показываем структуру только первых 2 сообщений каждого типа
+            # Показываем структуру только первых 2 сообщений каждого типа
             if self.message_count <= 2:
                 print(f"\n🔍 RAW MESSAGE #{self.message_count}:")
                 print(f"   Keys: {list(data.keys())}")
@@ -97,7 +98,7 @@ class OKXDataCollector:
                         ticker = data['data'][0]
                         print(f"   📈 Ticker - Last: {ticker.get('last')}, Funding: {ticker.get('fundingRate')}")
                 
-                # 🔧 НОВОЕ: Проверяем качество данных перед обновлением
+                # Проверяем качество данных перед обновлением
                 if self.is_data_quality_good():
                     self.update_features()
                 else:
@@ -110,7 +111,7 @@ class OKXDataCollector:
             self.stats['data_quality_issues'] += 1
     
     def is_data_quality_good(self):
-        """🔧 НОВОЕ: Проверяет качество полученных данных"""
+        """Проверяет качество полученных данных"""
         try:
             current_time = time.time()
             
@@ -169,7 +170,7 @@ class OKXDataCollector:
         self.stats['features_processed'] += 1
         self.stats['last_successful_update'] = current_time
         
-        # 🔧 НОВОЕ: Выводим в консоль каждые 15 секунд с улучшенной информацией
+        # Выводим в консоль каждые 15 секунд с улучшенной информацией
         if current_time - self.last_feature_print > 15:
             self.last_feature_print = current_time
             
@@ -207,7 +208,7 @@ class OKXDataCollector:
             print(f"   Data Quality: {self.stats['connection_quality']}")
             print(f"   Last Update: {time.time() - self.stats['last_successful_update']:.1f}s ago")
             
-            # 🔧 НОВОЕ: Статус данных по типам
+            # Статус данных по типам
             print(f"   Data Status:")
             for data_type, last_update in self.last_update_time.items():
                 age = current_time - last_update
@@ -217,7 +218,7 @@ class OKXDataCollector:
             print("="*60 + "\n")
     
     def update_connection_quality(self):
-        """🔧 НОВОЕ: Оценивает качество соединения"""
+        """Оценивает качество соединения"""
         current_time = time.time()
         time_since_last_update = current_time - self.stats['last_successful_update']
         
@@ -255,28 +256,27 @@ class OKXDataCollector:
         self.reconnect_attempts = 0
         self.stats['connection_quality'] = "CONNECTED"
         
-        # Подписываемся на каналы
-        from config import CHANNELS, SYMBOL
-        for channel in CHANNELS:
+        # 🔧 ИСПОЛЬЗУЕМ КОНФИГ ДЛЯ ПОДПИСКИ
+        for channel in config.data.CHANNELS:
             subscribe_msg = {
                 "op": "subscribe",
                 "args": [
                     {
                         "channel": channel,
-                        "instId": SYMBOL
+                        "instId": config.data.SYMBOL  # 🔧 ИСПОЛЬЗУЕМ КОНФИГ
                     }
                 ]
             }
             ws.send(json.dumps(subscribe_msg))
-            print(f"📡 Subscribed to: {channel} for {SYMBOL}")
+            print(f"📡 Subscribed to: {channel} for {config.data.SYMBOL}")
         
-        # 🔧 НОВОЕ: Инициализируем время обновления
+        # Инициализируем время обновления
         current_time = time.time()
         for data_type in self.last_update_time.keys():
             self.last_update_time[data_type] = current_time
     
     def get_connection_stats(self):
-        """🔧 НОВОЕ: Возвращает статистику соединения"""
+        """Возвращает статистику соединения"""
         current_time = time.time()
         uptime = current_time - self.connection_start_time if self.connection_start_time > 0 else 0
         
@@ -291,20 +291,18 @@ class OKXDataCollector:
     
     def start(self):
         """Запуск сбора данных с улучшенной обработкой ошибок"""
-        from config import WS_URL
-        
         print(f"🚀 Starting data collector... (attempt {self.reconnect_attempts + 1})")
         
         try:
             self.ws = websocket.WebSocketApp(
-                WS_URL,
+                config.data.WS_URL,  # 🔧 ИСПОЛЬЗУЕМ КОНФИГ
                 on_message=self.on_message,
                 on_error=self.on_error, 
                 on_close=self.on_close,
                 on_open=self.on_open
             )
             
-            # 🔧 НОВОЕ: Настраиваем SSL контекст
+            # Настраиваем SSL контекст
             ssl_defaults = ssl.create_default_context()
             ssl_defaults.check_hostname = False
             ssl_defaults.verify_mode = ssl.CERT_NONE
@@ -323,8 +321,8 @@ class OKXDataCollector:
             print(f"❌ Failed to start data collector: {e}")
             self.reconnect_attempts += 1
             if self.reconnect_attempts <= self.max_reconnect_attempts:
-                time.sleep(5)
+                time.sleep(config.data.RECONNECT_DELAY)  # 🔧 ИСПОЛЬЗУЕМ КОНФИГ
                 self.start()
 
-# Глобальный экземпляр - ОБЯЗАТЕЛЬНО В КОНЦЕ ФАЙЛА
+# Глобальный экземпляр
 data_collector = OKXDataCollector()
