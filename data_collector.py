@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime
 from feature_engine import feature_engine
+from data_logger import data_logger
 
 class OKXDataCollector:
     def __init__(self):
@@ -12,6 +13,7 @@ class OKXDataCollector:
         self.data_buffer = []
         self.message_count = 0
         self.last_feature_print = 0
+        self.last_data_log = 0
         
         # Раздельные буферы для разных типов данных
         self.order_book_data = []
@@ -26,12 +28,10 @@ class OKXDataCollector:
             
             # Обрабатываем разные типы сообщений
             if 'event' in data:
-                print(f"⚡ Event: {data['event']} - {data.get('msg', '')}")
+                if data['event'] != 'subscribe':  # Показываем только ошибки
+                    print(f"⚡ Event: {data['event']} - {data.get('msg', '')}")
             elif 'data' in data:
                 channel = data.get('arg', {}).get('channel', 'unknown')
-                # Убираем частый вывод, оставляем только для отладки
-                if self.message_count % 100 == 0:
-                    print(f"📥 [{self.message_count}] {channel}: {len(data['data'])} items")
                 
                 # Сохраняем данные в соответствующие буферы
                 if channel == 'books':
@@ -41,23 +41,31 @@ class OKXDataCollector:
                 elif channel == 'tickers':
                     self.ticker_data = data['data']
                 
-                # Обновляем фичи и выводим каждые 30 секунд
-                self.update_and_print_features()
+                # Обновляем фичи и выводим/логируем
+                self.update_features()
                 
         except Exception as e:
             print(f"❌ Message error: {e}")
     
-    def update_and_print_features(self):
-        """Обновляет и выводит фичи раз в 30 секунд"""
+    def update_features(self):
+        """Обновляет фичи и управляет выводом/логированием"""
         current_time = time.time()
-        if current_time - self.last_feature_print > 30:  # 30 секунд
+        
+        # Всегда обновляем фичи
+        features = feature_engine.get_all_features(
+            self.order_book_data, 
+            self.trade_data, 
+            self.ticker_data
+        )
+        
+        # Логируем данные каждую минуту
+        if current_time - self.last_data_log > 60:
+            self.last_data_log = current_time
+            data_logger.log_features(features)
+        
+        # Выводим в консоль каждые 30 секунд
+        if current_time - self.last_feature_print > 30:
             self.last_feature_print = current_time
-            
-            features = feature_engine.get_all_features(
-                self.order_book_data, 
-                self.trade_data, 
-                self.ticker_data
-            )
             
             print("\n" + "="*50)
             print("🎯 REAL-TIME FEATURES (30s update):")
@@ -66,6 +74,7 @@ class OKXDataCollector:
             print(f"📈 Cumulative Delta: {features['cumulative_delta']:.4f}")
             print(f"💰 Funding Rate: {features['funding_rate']:.6f}")
             print(f"🔄 Trades: {features['buy_trades']} buy / {features['sell_trades']} sell")
+            print(f"💾 Data points collected: {self.message_count}")
             print("="*50 + "\n")
     
     def on_error(self, ws, error):
