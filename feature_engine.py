@@ -13,17 +13,27 @@ class FeatureEngine:
         self.update_interval = 1
         self.last_history_debug = 0
         self.target_horizon = 20  # секунд для target
-        self.target_threshold = 0.02  
+        self.target_threshold = 0.02  # 0.02% вместо 0.05%
         self.delta_window = []  # Rolling window для delta
         self.max_delta_window = 100  # ~30 секунд истории
+        self.ob_debug_shown = False
         
     def calculate_order_book_imbalance(self, order_book_data):
-        """Рассчитывает imbalance из стакана"""
+        """Рассчитывает imbalance из стакана с улучшенной валидацией"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0.5
                 
             book = order_book_data[0]
+            
+            # Диагностика при первом вызове
+            if not self.ob_debug_shown:
+                self.ob_debug_shown = True
+                print(f"🔍 OrderBook структура: bids={len(book.get('bids', []))}, asks={len(book.get('asks', []))}")
+                if book.get('bids') and len(book['bids']) > 0:
+                    print(f"🔍 Sample bid: {book['bids'][0]}")
+                if book.get('asks') and len(book['asks']) > 0:
+                    print(f"🔍 Sample ask: {book['asks'][0]}")
             
             if 'bids' not in book or 'asks' not in book:
                 return 0.5
@@ -33,53 +43,77 @@ class FeatureEngine:
             bids = book['bids']
             asks = book['asks']
             
+            # Берем только первые 3 уровня
             bid_levels = min(len(bids), 3)
             ask_levels = min(len(asks), 3)
             
             if bid_levels == 0 or ask_levels == 0:
                 return 0.5
             
-            bid_volume = sum(float(bid[1]) for bid in bids[:bid_levels] if len(bid) >= 2)
-            ask_volume = sum(float(ask[1]) for ask in asks[:ask_levels] if len(ask) >= 2)
+            # Проверяем структуру данных
+            valid_bids = [bid for bid in bids[:bid_levels] if len(bid) >= 2 and float(bid[1]) > 0]
+            valid_asks = [ask for ask in asks[:ask_levels] if len(ask) >= 2 and float(ask[1]) > 0]
+            
+            if not valid_bids or not valid_asks:
+                return 0.5
+            
+            bid_volume = sum(float(bid[1]) for bid in valid_bids)
+            ask_volume = sum(float(ask[1]) for ask in valid_asks)
             
             total_volume = bid_volume + ask_volume
             if total_volume == 0:
                 return 0.5
                 
             imbalance = bid_volume / total_volume
-            return max(0.0, min(1.0, imbalance))
+            
+            # Защита от экстремальных значений
+            imbalance = max(0.01, min(0.99, imbalance))
+            
+            return imbalance
             
         except Exception as e:
             print(f"❌ Order book error: {e}")
             return 0.5
     
     def calculate_spread(self, order_book_data):
-        """Рассчитывает спред"""
+        """Рассчитывает спред с улучшенной обработкой ошибок"""
         try:
             if not order_book_data or len(order_book_data) == 0:
-                return 100.0  # Большое значение вместо 0
+                return 0.1  # Разумное значение по умолчанию
                 
             book = order_book_data[0]
             
             if 'bids' not in book or 'asks' not in book:
-                return 100.0
+                return 0.1
             if len(book['bids']) == 0 or len(book['asks']) == 0:
-                return 100.0
+                return 0.1
+            
+            # Проверяем что есть данные в стакане
+            if len(book['bids'][0]) < 1 or len(book['asks'][0]) < 1:
+                return 0.1
                 
             best_bid = float(book['bids'][0][0])
             best_ask = float(book['asks'][0][0])
             
+            # Защита от некорректных цен
+            if best_bid <= 0 or best_ask <= 0:
+                return 0.1
+                
             if best_bid >= best_ask:
-                return 100.0
+                return 0.1  # Некорректный спред
                 
             spread = best_ask - best_bid
             spread_percent = (spread / best_bid) * 100
             
-            return spread_percent if spread_percent >= 0 else 100.0
+            # Защита от аномальных значений
+            if spread_percent < 0 or spread_percent > 1.0:  # Максимум 1%
+                return 0.1
+                
+            return spread_percent
             
         except Exception as e:
             print(f"❌ Spread calculation error: {e}")
-            return 100.0
+            return 0.1
     
     def update_cumulative_delta(self, trade_data):
         """Обновляет ROLLING cumulative delta"""
@@ -88,26 +122,32 @@ class FeatureEngine:
                 return self.cumulative_delta
                 
             current_delta = 0
+            valid_trades = 0
+            
             for trade in trade_data:
                 if 'side' in trade and 'sz' in trade:
                     try:
                         size = float(trade['sz'])
-                        if trade['side'] == 'buy':
-                            current_delta += size
-                            self.trade_counts['buy'] += 1
-                        elif trade['side'] == 'sell':
-                            current_delta -= size
-                            self.trade_counts['sell'] += 1
+                        if size > 0:  # Проверяем что размер положительный
+                            if trade['side'] == 'buy':
+                                current_delta += size
+                                self.trade_counts['buy'] += 1
+                                valid_trades += 1
+                            elif trade['side'] == 'sell':
+                                current_delta -= size
+                                self.trade_counts['sell'] += 1
+                                valid_trades += 1
                     except (ValueError, TypeError):
                         continue
             
-            # Добавляем в rolling window
-            self.delta_window.append(current_delta)
-            if len(self.delta_window) > self.max_delta_window:
-                self.delta_window.pop(0)
-            
-            # Обновляем cumulative delta как сумму окна
-            self.cumulative_delta = sum(self.delta_window)
+            if valid_trades > 0:
+                # Добавляем в rolling window
+                self.delta_window.append(current_delta)
+                if len(self.delta_window) > self.max_delta_window:
+                    self.delta_window.pop(0)
+                
+                # Обновляем cumulative delta как сумму окна
+                self.cumulative_delta = sum(self.delta_window)
                     
             return self.cumulative_delta
             
@@ -127,7 +167,7 @@ class FeatureEngine:
             return 0
     
     def get_current_price(self, ticker_data):
-        """Извлекает текущую цену"""
+        """Извлекает текущую цену с улучшенной валидацией"""
         try:
             if not ticker_data or len(ticker_data) == 0:
                 return 0
@@ -137,11 +177,19 @@ class FeatureEngine:
             price_fields = ['last', 'lastPrice', 'close', 'markPx']
             for field in price_fields:
                 if field in ticker and ticker[field]:
-                    return float(ticker[field])
+                    price = float(ticker[field])
+                    if 1000 < price < 200000:  # Реалистичный диапазон для BTC
+                        return price
             
+            # Если нет прямой цены, пробуем mid price
             if 'askPx' in ticker and 'bidPx' in ticker:
                 if ticker['askPx'] and ticker['bidPx']:
-                    return (float(ticker['askPx']) + float(ticker['bidPx'])) / 2
+                    bid = float(ticker['bidPx'])
+                    ask = float(ticker['askPx'])
+                    if bid > 0 and ask > 0 and bid < ask:
+                        price = (bid + ask) / 2
+                        if 1000 < price < 200000:
+                            return price
             
             return 0
             
@@ -156,9 +204,9 @@ class FeatureEngine:
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > self.target_threshold:    # 0.05%
+        if price_change > self.target_threshold:    # 0.02%
             return 1
-        elif price_change < -self.target_threshold: # -0.05%
+        elif price_change < -self.target_threshold: # -0.02%
             return -1
         else:
             return 0
@@ -186,7 +234,19 @@ class FeatureEngine:
             if self.price_history:
                 oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
             
+            # Считаем eligible для target
+            target_time = current_time - timedelta(seconds=self.target_horizon)
+            eligible_count = sum(1 for dp in self.price_history if dp['timestamp'] <= target_time)
+            calculated_count = sum(1 for dp in self.price_history if dp.get('target_calculated', False))
+            
             print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
+            print(f"🔍 Target: {eligible_count} eligible, {calculated_count} calculated")
+            
+            if len(self.price_history) >= 2:
+                oldest_price = self.price_history[0]['price']
+                newest_price = self.price_history[-1]['price']
+                total_change = (newest_price - oldest_price) / oldest_price * 100
+                print(f"💰 Price change: {total_change:.4f}%")
         
         # Ограничение частоты
         if len(self.price_history) > 0:
@@ -225,7 +285,7 @@ class FeatureEngine:
                 
                 # Логируем только значимые изменения
                 price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                if abs(price_change) > self.target_threshold:
+                if target != 0:
                     print(f"🎯 TARGET: {target} (change: {price_change:.3f}%)")
         
         if targets_calculated > 0:
@@ -239,7 +299,7 @@ class FeatureEngine:
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи"""
+        """Собирает все фичи с улучшенной валидацией"""
         if not self.should_update_features():
             if self.price_history:
                 return self.price_history[-1]['features']
@@ -249,6 +309,13 @@ class FeatureEngine:
         self.update_cumulative_delta(trade_data)
         
         current_price = self.get_current_price(ticker_data)
+        
+        # Пропускаем обновление если цена невалидная
+        if current_price == 0:
+            if self.price_history:
+                return self.price_history[-1]['features']
+            else:
+                return self.create_empty_features()
         
         features = {
             'timestamp': datetime.now().isoformat(),
@@ -274,7 +341,7 @@ class FeatureEngine:
         return {
             'timestamp': datetime.now().isoformat(),
             'order_book_imbalance': 0.5,
-            'spread_percent': 0,
+            'spread_percent': 0.1,
             'cumulative_delta': self.cumulative_delta,
             'funding_rate': 0,
             'buy_trades': self.trade_counts['buy'],
