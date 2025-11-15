@@ -12,10 +12,10 @@ class FeatureEngine:
         self.last_update_time = 0
         self.update_interval = 1
         self.last_history_debug = 0
-        self.target_horizon = 20
-        self.target_threshold = 0.02
-        self.delta_window = []
-        self.max_delta_window = 100
+        self.target_horizon = 10  # 🔧 Уменьшено до 10 секунд
+        self.target_threshold = 0.08  # 🔧 Увеличено до 0.08%
+        self.trade_history = []  # 🔧 Исправлено: храним историю трейдов
+        self.volatility_window = 30  # 🔧 Добавлено: окно для волатильности
         self.ob_debug_shown = False
         
     def calculate_order_book_imbalance(self, order_book_data):
@@ -62,7 +62,7 @@ class FeatureEngine:
             return 0.5
     
     def calculate_spread(self, order_book_data):
-        """Рассчитывает спред"""
+        """Рассчитывает спред с улучшенной логикой"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0.1
@@ -87,7 +87,8 @@ class FeatureEngine:
                 return 0.1
                 
             spread = best_ask - best_bid
-            spread_percent = (spread / best_bid) * 100
+            mid_price = (best_bid + best_ask) / 2
+            spread_percent = (spread / mid_price) * 100  # 🔧 Исправлено: mid price вместо bid
             
             if spread_percent < 0 or spread_percent > 1.0:
                 return 0.1
@@ -98,41 +99,62 @@ class FeatureEngine:
             return 0.1
     
     def update_cumulative_delta(self, trade_data):
-        """Обновляет ROLLING cumulative delta"""
+        """🔧 ИСПРАВЛЕННЫЙ: Rolling delta за 20 секунд"""
         try:
-            if not trade_data:
-                return self.cumulative_delta
-                
-            current_delta = 0
-            valid_trades = 0
+            current_time = time.time()
             
+            # Добавляем новые трейды в историю
             for trade in trade_data:
                 if 'side' in trade and 'sz' in trade:
                     try:
                         size = float(trade['sz'])
-                        if size > 0:
-                            if trade['side'] == 'buy':
-                                current_delta += size
-                                self.trade_counts['buy'] += 1
-                                valid_trades += 1
-                            elif trade['side'] == 'sell':
-                                current_delta -= size
-                                self.trade_counts['sell'] += 1
-                                valid_trades += 1
+                        sign = 1 if trade['side'] == 'buy' else -1
+                        self.trade_history.append((current_time, sign * size))
+                        
+                        if trade['side'] == 'buy':
+                            self.trade_counts['buy'] += 1
+                        else:
+                            self.trade_counts['sell'] += 1
                     except (ValueError, TypeError):
                         continue
             
-            if valid_trades > 0:
-                self.delta_window.append(current_delta)
-                if len(self.delta_window) > self.max_delta_window:
-                    self.delta_window.pop(0)
-                
-                self.cumulative_delta = sum(self.delta_window)
-                    
+            # Удаляем трейды старше 20 секунд
+            self.trade_history = [(ts, vol) for ts, vol in self.trade_history 
+                                 if current_time - ts <= 20]
+            
+            # Считаем delta как сумму за последние 20 секунд
+            self.cumulative_delta = sum(vol for ts, vol in self.trade_history)
+            
             return self.cumulative_delta
             
         except Exception as e:
             return self.cumulative_delta
+    
+    def calculate_volatility(self):
+        """🔧 ДОБАВЛЕНО: Расчет волатильности"""
+        try:
+            if len(self.price_history) < 2:
+                return 0
+                
+            # Берем последние N цен для расчета волатильности
+            prices = [dp['price'] for dp in self.price_history[-self.volatility_window:]]
+            if len(prices) < 2:
+                return 0
+                
+            returns = []
+            for i in range(1, len(prices)):
+                if prices[i-1] != 0:
+                    ret = (prices[i] - prices[i-1]) / prices[i-1]
+                    returns.append(ret)
+            
+            if len(returns) < 2:
+                return 0
+                
+            volatility = np.std(returns) * 100  # В процентах
+            return volatility
+            
+        except Exception as e:
+            return 0
     
     def extract_funding_rate(self, ticker_data):
         """Извлекает funding rate"""
@@ -174,15 +196,15 @@ class FeatureEngine:
             return 0
     
     def calculate_target(self, current_price, future_price):
-        """Рассчитывает target"""
+        """Рассчитывает target с улучшенным порогом"""
         if current_price == 0 or future_price == 0:
             return 0
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > self.target_threshold:
+        if price_change > self.target_threshold:    # 0.08%
             return 1
-        elif price_change < -self.target_threshold:
+        elif price_change < -self.target_threshold: # -0.08%
             return -1
         else:
             return 0
@@ -196,13 +218,13 @@ class FeatureEngine:
         return False
     
     def update_price_history(self, current_price, features):
-        """Обновляет историю с минимальным выводом"""
+        """Обновляет историю с ИСПРАВЛЕННОЙ логикой возврата"""
         if current_price == 0:
             return None
             
         current_time = datetime.now()
         
-        # Дебаг каждые 30 секунд вместо 10
+        # Дебаг каждые 30 секунд
         current_timestamp = time.time()
         if current_timestamp - self.last_history_debug > 30:
             self.last_history_debug = current_timestamp
@@ -251,20 +273,17 @@ class FeatureEngine:
                 data_point['target_calculated'] = True
                 targets_calculated += 1
         
+        # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ВОЗВРАЩАЕМ ВСЕГДА фичи с target
         if targets_calculated > 0:
-            # 🔇 ТОЛЬКО важные сообщения
-            if targets_calculated > 5:  # Показываем только при массовом расчете
-                print(f"✅ Calculated {targets_calculated} targets")
-            
-            # Возвращаем фичи с target
+            # Ищем ЛЮБУЮ запись с рассчитанным target
             for data_point in reversed(self.price_history):
-                if 'target' in data_point['features'] and data_point['features']['target'] != 0:
+                if 'target' in data_point['features']:
                     return data_point['features']
         
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи"""
+        """Собирает все фичи с волатильностью"""
         if not self.should_update_features():
             if self.price_history:
                 return self.price_history[-1]['features']
@@ -281,6 +300,9 @@ class FeatureEngine:
             else:
                 return self.create_empty_features()
         
+        # 🔧 ДОБАВЛЕНО: Расчет волатильности
+        volatility = self.calculate_volatility()
+        
         features = {
             'timestamp': datetime.now().isoformat(),
             'order_book_imbalance': self.calculate_order_book_imbalance(order_book_data),
@@ -291,6 +313,7 @@ class FeatureEngine:
             'sell_trades': self.trade_counts['sell'],
             'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
             'current_price': current_price,
+            'volatility': volatility,  # 🔧 НОВАЯ ФИЧА
             'target': 0
         }
         
@@ -313,6 +336,7 @@ class FeatureEngine:
             'sell_trades': self.trade_counts['sell'],
             'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
             'current_price': 0,
+            'volatility': 0,
             'target': 0
         }
 
