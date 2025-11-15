@@ -1,7 +1,7 @@
 # data_logger.py
 import csv
 import os
-import time  # ДОБАВИТЬ ЭТУ СТРОКУ!
+import time
 from datetime import datetime
 
 class DataLogger:
@@ -9,7 +9,8 @@ class DataLogger:
         self.data_file = "data/training_data.csv"
         self.setup_data_file()
         self.last_log_time = 0
-        self.log_interval = 30  # Логировать каждые 30 секунд
+        self.log_interval = 10  # Уменьшено до 10 секунд
+        self.logged_count = 0
     
     def setup_data_file(self):
         """Создает файл данных с заголовками включая target"""
@@ -33,15 +34,20 @@ class DataLogger:
             print("📁 Created new training_data.csv")
     
     def log_features(self, features):
-        """Сохраняет фичи в CSV КАЖДЫЕ 30 СЕКУНД"""
+        """Сохраняет фичи в CSV КАЖДЫЕ 10 СЕКУНД"""
         try:
             current_time = time.time()
             
-            # Логируем только каждые 30 секунд И если есть target
+            # ДИАГНОСТИКА: показываем что получаем
+            if self.logged_count == 0 and features.get('target', 0) != 0:
+                print(f"🔍 DEBUG: First target received: {features['target']}")
+            
+            # Логируем только каждые 10 секунд И если есть target
             if (current_time - self.last_log_time >= self.log_interval and 
                 features.get('target', 0) != 0):
                 
                 self.last_log_time = current_time
+                self.logged_count += 1
                 
                 with open(self.data_file, 'a', newline='') as f:
                     writer = csv.writer(f)
@@ -57,7 +63,7 @@ class DataLogger:
                         features['current_price'],
                         features['target']
                     ])
-                print(f"💾 Data logged: target={features['target']}")
+                print(f"💾 Data logged #{self.logged_count}: target={features['target']}")
                 
         except Exception as e:
             print(f"❌ Data logging error: {e}")
