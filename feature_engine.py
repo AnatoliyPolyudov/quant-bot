@@ -204,7 +204,7 @@ class FeatureEngine:
             return -1
         else:
             return 0
-    
+
     def should_update_features(self):
         """Проверяет, нужно ли обновлять фичи"""
         current_time = time.time()
@@ -212,78 +212,81 @@ class FeatureEngine:
             self.last_update_time = current_time
             return True
         return False
-    
+
     def update_price_history(self, current_price, features):
-        """Обновляет историю БЕЗ ограничений"""
+        """ОБНОВЛЕННЫЙ МЕТОД: Исправленный расчет target"""
         if current_price == 0:
             return None
             
         current_time = datetime.now()
         
-        # 🔧 УБРАНО ограничение частоты
-        # if len(self.price_history) > 0:
-        #     last_time = self.price_history[-1]['timestamp']
-        #     time_diff = (current_time - last_time).total_seconds()
-        #     if time_diff < 0.5:
-        #         return None
-        
-        # Добавляем в историю
-        self.price_history.append({
+        # Добавляем текущую точку в историю
+        current_data_point = {
             'timestamp': current_time,
             'price': current_price,
             'features': features.copy(),
-            'target_calculated': False
-        })
+            'target_calculated': False,
+            'target': 0
+        }
+        self.price_history.append(current_data_point)
         
+        # Ограничиваем размер истории для производительности
         if len(self.price_history) > 200:
             self.price_history = self.price_history[-200:]
         
-        # Дебаг каждые 10 секунд
-        current_timestamp = time.time()
-        if current_timestamp - self.last_history_debug > 10:
-            self.last_history_debug = current_timestamp
-            oldest_age = 0
-            if self.price_history:
-                oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
-            
-            target_time = current_time - timedelta(seconds=self.target_horizon)
-            eligible_count = sum(1 for dp in self.price_history if dp['timestamp'] <= target_time)
-            calculated_count = sum(1 for dp in self.price_history if dp.get('target_calculated', False))
-            
-            print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
-            print(f"🔍 Target: {eligible_count} eligible, {calculated_count} calculated")
-        
-        # РАСЧЕТ TARGET
-        target_time = current_time - timedelta(seconds=self.target_horizon)
+        # 🔧 ФИКС 1: Рассчитываем target для старых точек
         targets_calculated = 0
+        features_with_target = None
         
-        for data_point in self.price_history:
-            if (data_point['timestamp'] <= target_time and 
-                not data_point['target_calculated']):
+        for old_data_point in self.price_history:
+            if old_data_point['target_calculated']:
+                continue
                 
+            # Вычисляем время, которое должно пройти для этого target
+            time_passed = (current_time - old_data_point['timestamp']).total_seconds()
+            
+            if time_passed >= self.target_horizon:
+                # Используем текущую цену как будущую для расчета target
                 future_price = current_price
-                current_price_at_time = data_point['price']
+                old_price = old_data_point['price']
                 
-                target = self.calculate_target(current_price_at_time, future_price)
-                data_point['features']['target'] = target
-                data_point['target_calculated'] = True
+                target = self.calculate_target(old_price, future_price)
+                old_data_point['target'] = target
+                old_data_point['target_calculated'] = True
+                old_data_point['features']['target'] = target
                 targets_calculated += 1
                 
-                # Логируем ВСЕ расчеты target
-                price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                if target != 0:  # 🔧 Логируем только ненулевые target
-                    print(f"🎯 TARGET: {target} (change: {price_change:.3f}%)")
+                # Сохраняем последнюю точку с ненулевым target
+                if target != 0:
+                    features_with_target = old_data_point['features']
+                
+                # Логируем расчеты target
+                price_change = (future_price - old_price) / old_price * 100
+                if target != 0:
+                    print(f"🎯 CALCULATED TARGET: {target} (change: {price_change:.4f}%, "
+                          f"time: {time_passed:.1f}s, old: {old_price:.1f}, current: {future_price:.1f})")
         
-        if targets_calculated > 0:
-            print(f"✅ Calculated {targets_calculated} targets")
+        # 🔧 ФИКС 2: Дебаг информация каждые 15 секунд
+        current_timestamp = time.time()
+        if current_timestamp - self.last_history_debug > 15:
+            self.last_history_debug = current_timestamp
             
-            # Возвращаем фичи с target
-            for data_point in reversed(self.price_history):
-                if 'target' in data_point['features'] and data_point['features']['target'] != 0:
-                    return data_point['features']
+            total_points = len(self.price_history)
+            calculated_targets = sum(1 for p in self.price_history if p['target_calculated'])
+            non_zero_targets = sum(1 for p in self.price_history if p.get('target', 0) != 0)
+            
+            print(f"\n📈 PRICE HISTORY: {total_points} points, "
+                  f"{calculated_targets} targets calculated, "
+                  f"{non_zero_targets} non-zero targets")
+            
+            # Показываем распределение targets
+            if non_zero_targets > 0:
+                long_count = sum(1 for p in self.price_history if p.get('target', 0) == 1)
+                short_count = sum(1 for p in self.price_history if p.get('target', 0) == -1)
+                print(f"📊 TARGET DISTRIBUTION: LONG={long_count}, SHORT={short_count}")
         
-        return None
-    
+        return features_with_target
+
     def get_all_features(self, order_book_data, trade_data, ticker_data):
         """Собирает все фичи"""
         if not self.should_update_features():
@@ -315,14 +318,16 @@ class FeatureEngine:
             'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
             'current_price': current_price,
             'volatility': volatility,
-            'target': 0
+            'target': 0  # Будет заполнено позже
         }
         
+        # 🔧 ФИКС 3: Всегда обновляем историю и возвращаем актуальные фичи
         updated_features = self.update_price_history(current_price, features)
         
         if updated_features is not None:
             return updated_features
         else:
+            # Возвращаем текущие фичи, даже если target еще не рассчитан
             return features
 
     def create_empty_features(self):
