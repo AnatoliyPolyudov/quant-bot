@@ -9,6 +9,7 @@ class FeatureEngine:
         self.price_history = []
         self.feature_history = []
         self.price_debug_count = 0
+        self.target_calculated_count = 0
         
     def calculate_order_book_imbalance(self, order_book_data):
         """Рассчитывает imbalance из стакана"""
@@ -101,11 +102,6 @@ class FeatureEngine:
             
             ticker = ticker_data[0]
             
-            # Отладочный вывод (только первые 5 раз)
-            if self.price_debug_count < 5:
-                print(f"🔍 DEBUG TICKER [{self.price_debug_count}]: {ticker}")
-                self.price_debug_count += 1
-            
             # Пробуем разные поля где может быть цена
             if 'last' in ticker and ticker['last']:
                 price = float(ticker['last'])
@@ -119,24 +115,14 @@ class FeatureEngine:
             elif 'markPx' in ticker:
                 price = float(ticker['markPx'])
             else:
-                # Если ничего не нашли, используем стакан
-                return self.get_price_from_orderbook()
+                return 0
             
             return price
             
         except Exception as e:
-            if self.price_debug_count < 10:
-                print(f"❌ DEBUG: Price extraction error: {e}")
-                self.price_debug_count += 1
             return 0
     
-    def get_price_from_orderbook(self):
-        """Получает цену из стакана как среднюю между bid/ask"""
-        # Этот метод нужно будет вызвать если в тикерах нет цены
-        # Пока возвращаем 0
-        return 0
-    
-    def calculate_target(self, current_price, future_price, threshold=0.1):
+    def calculate_target(self, current_price, future_price, threshold=0.05):
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
         if current_price == 0 or future_price == 0:
             return 0
@@ -153,9 +139,6 @@ class FeatureEngine:
     def update_price_history(self, current_price, features):
         """Обновляет историю цен и фичей"""
         if current_price == 0:
-            if self.price_debug_count < 10:
-                print("❌ DEBUG: Current price is 0, skipping history update")
-                self.price_debug_count += 1
             return None
             
         current_time = datetime.now()
@@ -167,23 +150,20 @@ class FeatureEngine:
             'features': features.copy()
         })
         
-        # Очищаем старые данные (храним 10 минут)
-        ten_min_ago = current_time - timedelta(minutes=10)
-        self.price_history = [
-            p for p in self.price_history 
-            if p['timestamp'] > ten_min_ago
-        ]
+        # ОЧИСТКА: оставляем только последние 200 записей
+        if len(self.price_history) > 200:
+            self.price_history = self.price_history[-200:]
         
         # ОТЛАДКА: выводим размер истории
         if len(self.price_history) % 50 == 0:
             print(f"🔍 DEBUG: Price history size = {len(self.price_history)}, current_price = {current_price}")
         
-        # Обновляем target для записей 1-минутной давности
-        one_min_ago = current_time - timedelta(minutes=1)
+        # РАСЧЕТ TARGET: для всех записей старше 30 секунд
+        thirty_sec_ago = current_time - timedelta(seconds=30)
         target_updated = False
         
         for data_point in self.price_history:
-            if (data_point['timestamp'] <= one_min_ago and 
+            if (data_point['timestamp'] <= thirty_sec_ago and 
                 'target' not in data_point['features']):
                 
                 future_price = current_price
@@ -192,13 +172,20 @@ class FeatureEngine:
                 target = self.calculate_target(current_price_at_time, future_price)
                 data_point['features']['target'] = target
                 target_updated = True
+                self.target_calculated_count += 1
                 
-                # Логируем данные с target
+                # Логируем ВСЕГДА
                 price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                print(f"🎯 TARGET CALCULATED: {target} (price change: {price_change:.3f}%)")
+                print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
                 
                 # Возвращаем обновленные фичи для сохранения
                 return data_point['features']
+        
+        # Если target не рассчитан, выводим отладку
+        if not target_updated and len(self.price_history) > 30:
+            oldest_record = self.price_history[0]
+            age_seconds = (current_time - oldest_record['timestamp']).total_seconds()
+            print(f"⏳ DEBUG: Oldest record age = {age_seconds:.1f}s, waiting for 30s threshold")
         
         return None
     
