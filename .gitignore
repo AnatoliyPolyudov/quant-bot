@@ -6,5 +6,3 @@ __pycache__/
 *.swp
 *.dist-info/
 .env
-
-
