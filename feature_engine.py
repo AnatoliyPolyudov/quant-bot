@@ -6,8 +6,9 @@ class FeatureEngine:
     def __init__(self):
         self.cumulative_delta = 0
         self.trade_counts = {'buy': 0, 'sell': 0}
-        self.price_history = []  # храним историю цен для расчета target
-        self.feature_history = []  # храним фичи с временными метками
+        self.price_history = []
+        self.feature_history = []
+        self.price_debug_count = 0
         
     def calculate_order_book_imbalance(self, order_book_data):
         """Рассчитывает imbalance из стакана"""
@@ -97,12 +98,43 @@ class FeatureEngine:
         try:
             if not ticker_data or len(ticker_data) == 0:
                 return 0
+            
             ticker = ticker_data[0]
+            
+            # Отладочный вывод (только первые 5 раз)
+            if self.price_debug_count < 5:
+                print(f"🔍 DEBUG TICKER [{self.price_debug_count}]: {ticker}")
+                self.price_debug_count += 1
+            
             # Пробуем разные поля где может быть цена
-            price = ticker.get('last', ticker.get('lastPrice', ticker.get('close', 0)))
-            return float(price)
-        except:
+            if 'last' in ticker and ticker['last']:
+                price = float(ticker['last'])
+            elif 'lastPrice' in ticker and ticker['lastPrice']:
+                price = float(ticker['lastPrice']) 
+            elif 'close' in ticker and ticker['close']:
+                price = float(ticker['close'])
+            elif 'askPx' in ticker and 'bidPx' in ticker:
+                # Берем среднюю между лучшими ценами
+                price = (float(ticker['askPx']) + float(ticker['bidPx'])) / 2
+            elif 'markPx' in ticker:
+                price = float(ticker['markPx'])
+            else:
+                # Если ничего не нашли, используем стакан
+                return self.get_price_from_orderbook()
+            
+            return price
+            
+        except Exception as e:
+            if self.price_debug_count < 10:
+                print(f"❌ DEBUG: Price extraction error: {e}")
+                self.price_debug_count += 1
             return 0
+    
+    def get_price_from_orderbook(self):
+        """Получает цену из стакана как среднюю между bid/ask"""
+        # Этот метод нужно будет вызвать если в тикерах нет цены
+        # Пока возвращаем 0
+        return 0
     
     def calculate_target(self, current_price, future_price, threshold=0.1):
         """Рассчитывает трехклассовую цель (-1/0/+1)"""
@@ -111,17 +143,20 @@ class FeatureEngine:
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > threshold:    # рост > 0.1%
+        if price_change > threshold:
             return 1
-        elif price_change < -threshold: # падение > 0.1%
+        elif price_change < -threshold:
             return -1
-        else:                           # движение в пределах ±0.1%
+        else:
             return 0
     
     def update_price_history(self, current_price, features):
         """Обновляет историю цен и фичей"""
         if current_price == 0:
-            return
+            if self.price_debug_count < 10:
+                print("❌ DEBUG: Current price is 0, skipping history update")
+                self.price_debug_count += 1
+            return None
             
         current_time = datetime.now()
         
@@ -140,11 +175,13 @@ class FeatureEngine:
         ]
         
         # ОТЛАДКА: выводим размер истории
-        if len(self.price_history) % 10 == 0:
-            print(f"🔍 DEBUG: Price history size = {len(self.price_history)}")
+        if len(self.price_history) % 50 == 0:
+            print(f"🔍 DEBUG: Price history size = {len(self.price_history)}, current_price = {current_price}")
         
-        # Обновляем target для записей 1-минутной давности (для теста)
+        # Обновляем target для записей 1-минутной давности
         one_min_ago = current_time - timedelta(minutes=1)
+        target_updated = False
+        
         for data_point in self.price_history:
             if (data_point['timestamp'] <= one_min_ago and 
                 'target' not in data_point['features']):
@@ -154,6 +191,7 @@ class FeatureEngine:
                 
                 target = self.calculate_target(current_price_at_time, future_price)
                 data_point['features']['target'] = target
+                target_updated = True
                 
                 # Логируем данные с target
                 price_change = (future_price - current_price_at_time) / current_price_at_time * 100
