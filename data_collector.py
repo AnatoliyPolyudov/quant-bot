@@ -27,6 +27,18 @@ class OKXDataCollector:
             data = json.loads(message)
             self.message_count += 1
             
+            # ДИАГНОСТИКА: показываем структуру первых сообщений
+            if self.message_count <= 3:
+                print(f"\n🔍 RAW MESSAGE #{self.message_count}:")
+                print(f"   Keys: {list(data.keys())}")
+                if 'arg' in data:
+                    print(f"   Channel: {data['arg']}")
+                if 'data' in data:
+                    print(f"   Data length: {len(data['data'])}")
+                    if len(data['data']) > 0:
+                        print(f"   First item keys: {list(data['data'][0].keys())}")
+                        print(f"   Sample: {str(data['data'][0])[:200]}...")
+            
             # Обрабатываем разные типы сообщений
             if 'event' in data:
                 if data['event'] != 'subscribe':  # Показываем только ошибки
@@ -37,10 +49,22 @@ class OKXDataCollector:
                 # Сохраняем данные в соответствующие буферы
                 if channel == 'books':
                     self.order_book_data = data['data']
+                    # Проверяем структуру стакана
+                    if self.message_count <= 3 and len(data['data']) > 0:
+                        book = data['data'][0]
+                        print(f"   📚 Order Book - Bids: {len(book.get('bids', []))}, Asks: {len(book.get('asks', []))}")
+                        
                 elif channel == 'trades':
                     self.trade_data = data['data']
+                    if self.message_count <= 3 and len(data['data']) > 0:
+                        trade = data['data'][0]
+                        print(f"   💰 Trade - Side: {trade.get('side')}, Size: {trade.get('sz')}")
+                        
                 elif channel == 'tickers':
                     self.ticker_data = data['data']
+                    if self.message_count <= 3 and len(data['data']) > 0:
+                        ticker = data['data'][0]
+                        print(f"   📈 Ticker - Last: {ticker.get('last')}, Funding: {ticker.get('fundingRate')}")
                 
                 # Обновляем фичи и выводим/логируем
                 self.update_features()
@@ -62,24 +86,25 @@ class OKXDataCollector:
         # Анализ бейзлайн-стратегией
         strategy_result = baseline_strategy.analyze_signal(features)
         
-        # Логируем данные каждую минуту
-        if current_time - self.last_data_log > 60:
+        # Логируем данные каждую минуту (только если есть реальные данные)
+        if current_time - self.last_data_log > 60 and features.get('current_price', 0) > 0:
             self.last_data_log = current_time
             data_logger.log_features(features)
         
-        # Выводим в консоль каждые 30 секунд
-        if current_time - self.last_feature_print > 30:
+        # Выводим в консоль каждые 10 секунд (чаще для отладки)
+        if current_time - self.last_feature_print > 10:
             self.last_feature_print = current_time
             
             print("\n" + "="*50)
-            print("🎯 REAL-TIME FEATURES + BASELINE STRATEGY")
+            print(f"🎯 REAL-TIME FEATURES (Msg #{self.message_count})")
             print("="*50)
             
             print(f"📊 Order Book Imbalance: {features['order_book_imbalance']:.3f}")
-            print(f"📏 Spread: {features['spread_percent']:.4f}%")
+            print(f"📏 Spread: {features['spread_percent']:.6f}%")
             print(f"📈 Cumulative Delta: {features['cumulative_delta']:.4f}")
-            print(f"💰 Funding Rate: {features['funding_rate']:.6f}")
+            print(f"💰 Funding Rate: {features['funding_rate']:.8f}")
             print(f"🔄 Trades: {features['buy_trades']} buy / {features['sell_trades']} sell")
+            print(f"💵 Current Price: {features['current_price']}")
             
             print(f"\n🤖 BASELINE DECISION: {strategy_result['decision']}")
             print(f"🎯 Confidence: {strategy_result['confidence']:.1f}%")
@@ -87,7 +112,7 @@ class OKXDataCollector:
             for signal in strategy_result['signals']:
                 print(f"   {signal}")
                 
-            print(f"💾 Data points: {self.message_count}")
+            print(f"📊 Data buffers - OB: {len(self.order_book_data)}, Trades: {len(self.trade_data)}, Ticker: {len(self.ticker_data)}")
             print("="*50 + "\n")
     
     def on_error(self, ws, error):
