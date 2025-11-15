@@ -12,10 +12,10 @@ class FeatureEngine:
         self.last_update_time = 0
         self.update_interval = 1
         self.last_history_debug = 0
-        self.target_horizon = 10  # 🔧 Уменьшено до 10 секунд
-        self.target_threshold = 0.08  # 🔧 Увеличено до 0.08%
-        self.trade_history = []  # 🔧 Исправлено: храним историю трейдов
-        self.volatility_window = 30  # 🔧 Добавлено: окно для волатильности
+        self.target_horizon = 10
+        self.target_threshold = 0.03  # Уменьшено до 0.03%
+        self.trade_history = []
+        self.volatility_window = 30
         self.ob_debug_shown = False
         
     def calculate_order_book_imbalance(self, order_book_data):
@@ -62,7 +62,7 @@ class FeatureEngine:
             return 0.5
     
     def calculate_spread(self, order_book_data):
-        """Рассчитывает спред с улучшенной логикой"""
+        """Рассчитывает спред"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0.1
@@ -88,7 +88,7 @@ class FeatureEngine:
                 
             spread = best_ask - best_bid
             mid_price = (best_bid + best_ask) / 2
-            spread_percent = (spread / mid_price) * 100  # 🔧 Исправлено: mid price вместо bid
+            spread_percent = (spread / mid_price) * 100
             
             if spread_percent < 0 or spread_percent > 1.0:
                 return 0.1
@@ -99,11 +99,10 @@ class FeatureEngine:
             return 0.1
     
     def update_cumulative_delta(self, trade_data):
-        """🔧 ИСПРАВЛЕННЫЙ: Rolling delta за 20 секунд"""
+        """Rolling delta за 20 секунд"""
         try:
             current_time = time.time()
             
-            # Добавляем новые трейды в историю
             for trade in trade_data:
                 if 'side' in trade and 'sz' in trade:
                     try:
@@ -118,11 +117,9 @@ class FeatureEngine:
                     except (ValueError, TypeError):
                         continue
             
-            # Удаляем трейды старше 20 секунд
             self.trade_history = [(ts, vol) for ts, vol in self.trade_history 
                                  if current_time - ts <= 20]
             
-            # Считаем delta как сумму за последние 20 секунд
             self.cumulative_delta = sum(vol for ts, vol in self.trade_history)
             
             return self.cumulative_delta
@@ -131,12 +128,11 @@ class FeatureEngine:
             return self.cumulative_delta
     
     def calculate_volatility(self):
-        """🔧 ДОБАВЛЕНО: Расчет волатильности"""
+        """Расчет волатильности"""
         try:
             if len(self.price_history) < 2:
                 return 0
                 
-            # Берем последние N цен для расчета волатильности
             prices = [dp['price'] for dp in self.price_history[-self.volatility_window:]]
             if len(prices) < 2:
                 return 0
@@ -150,7 +146,7 @@ class FeatureEngine:
             if len(returns) < 2:
                 return 0
                 
-            volatility = np.std(returns) * 100  # В процентах
+            volatility = np.std(returns) * 100
             return volatility
             
         except Exception as e:
@@ -196,15 +192,15 @@ class FeatureEngine:
             return 0
     
     def calculate_target(self, current_price, future_price):
-        """Рассчитывает target с улучшенным порогом"""
+        """Рассчитывает target"""
         if current_price == 0 or future_price == 0:
             return 0
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > self.target_threshold:    # 0.08%
+        if price_change > self.target_threshold:
             return 1
-        elif price_change < -self.target_threshold: # -0.08%
+        elif price_change < -self.target_threshold:
             return -1
         else:
             return 0
@@ -218,15 +214,36 @@ class FeatureEngine:
         return False
     
     def update_price_history(self, current_price, features):
-        """Обновляет историю с ИСПРАВЛЕННОЙ логикой возврата"""
+        """Обновляет историю БЕЗ ограничений"""
         if current_price == 0:
             return None
             
         current_time = datetime.now()
         
-        # Дебаг каждые 30 секунд
+        # 🔧 УБРАНО ограничение частоты
+        # if len(self.price_history) > 0:
+        #     last_time = self.price_history[-1]['timestamp']
+        #     time_diff = (current_time - last_time).total_seconds()
+        #     if time_diff < 0.5:
+        #         return None
+        
+        # 🔧 ДОБАВЛЕНО: диагностика добавления в историю
+        print(f"➕ ADDING TO HISTORY: price={current_price}, history_size={len(self.price_history)}")
+        
+        # Добавляем в историю
+        self.price_history.append({
+            'timestamp': current_time,
+            'price': current_price,
+            'features': features.copy(),
+            'target_calculated': False
+        })
+        
+        if len(self.price_history) > 200:
+            self.price_history = self.price_history[-200:]
+        
+        # Дебаг каждые 10 секунд
         current_timestamp = time.time()
-        if current_timestamp - self.last_history_debug > 30:
+        if current_timestamp - self.last_history_debug > 10:
             self.last_history_debug = current_timestamp
             oldest_age = 0
             if self.price_history:
@@ -238,24 +255,6 @@ class FeatureEngine:
             
             print(f"📈 History: {len(self.price_history)} records, oldest: {oldest_age:.1f}s")
             print(f"🔍 Target: {eligible_count} eligible, {calculated_count} calculated")
-        
-        # Ограничение частоты
-        if len(self.price_history) > 0:
-            last_time = self.price_history[-1]['timestamp']
-            time_diff = (current_time - last_time).total_seconds()
-            if time_diff < 0.5:
-                return None
-        
-        # Добавляем в историю
-        self.price_history.append({
-            'timestamp': current_time,
-            'price': current_price,
-            'features': features.copy(),
-            'target_calculated': False
-        })
-        
-        if len(self.price_history) > 600:
-            self.price_history = self.price_history[-600:]
         
         # РАСЧЕТ TARGET
         target_time = current_time - timedelta(seconds=self.target_horizon)
@@ -272,10 +271,15 @@ class FeatureEngine:
                 data_point['features']['target'] = target
                 data_point['target_calculated'] = True
                 targets_calculated += 1
+                
+                # Логируем ВСЕ расчеты target
+                price_change = (future_price - current_price_at_time) / current_price_at_time * 100
+                print(f"🎯 CALCULATED: {target} (change: {price_change:.3f}%)")
         
-        # 🔧 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ВОЗВРАЩАЕМ ВСЕГДА фичи с target
         if targets_calculated > 0:
-            # Ищем ЛЮБУЮ запись с рассчитанным target
+            print(f"✅ Calculated {targets_calculated} targets")
+            
+            # Возвращаем фичи с target
             for data_point in reversed(self.price_history):
                 if 'target' in data_point['features']:
                     return data_point['features']
@@ -283,7 +287,7 @@ class FeatureEngine:
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи с волатильностью"""
+        """Собирает все фичи"""
         if not self.should_update_features():
             if self.price_history:
                 return self.price_history[-1]['features']
@@ -300,7 +304,6 @@ class FeatureEngine:
             else:
                 return self.create_empty_features()
         
-        # 🔧 ДОБАВЛЕНО: Расчет волатильности
         volatility = self.calculate_volatility()
         
         features = {
@@ -313,7 +316,7 @@ class FeatureEngine:
             'sell_trades': self.trade_counts['sell'],
             'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
             'current_price': current_price,
-            'volatility': volatility,  # 🔧 НОВАЯ ФИЧА
+            'volatility': volatility,
             'target': 0
         }
         
