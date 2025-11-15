@@ -10,11 +10,10 @@ class DataLogger:
         self.setup_data_file()
         self.logged_count = 0
         self.last_log_time = 0
-        self.log_interval = 5  # 🔧 Увеличить до 5 секунд
+        self.log_interval = 5
         self.anomaly_count = 0
         
     def setup_data_file(self):
-        """Создает файл данных с заголовками"""
         os.makedirs("data", exist_ok=True)
         if not os.path.exists(self.data_file):
             with open(self.data_file, 'w', newline='') as f:
@@ -29,11 +28,11 @@ class DataLogger:
                     'sell_trades',
                     'total_trades',
                     'current_price',
+                    'volatility',  # 🔧 Добавлена новая фича
                     'target'
                 ])
     
     def is_valid_features(self, features):
-        """Проверяет валидность фич перед сохранением"""
         try:
             spread = features.get('spread_percent', 0)
             if spread > 1.0:
@@ -57,14 +56,12 @@ class DataLogger:
             return False
     
     def log_features(self, features):
-        """Логирует данные с минимальным выводом"""
         try:
             current_time = time.time()
             
             if not self.is_valid_features(features):
                 return
             
-            # 🔧 Логируем только каждые 5 секунд
             if current_time - self.last_log_time >= self.log_interval:
                 self.last_log_time = current_time
                 self.logged_count += 1
@@ -81,12 +78,12 @@ class DataLogger:
                         features['sell_trades'],
                         features['total_trades'],
                         features['current_price'],
+                        features.get('volatility', 0),  # 🔧 Добавлена волатильность
                         features.get('target', 0)
                     ])
                 
                 target_val = features.get('target', 0)
                 
-                # 🔇 ЛОГИРУЕМ ТОЛЬКО target ≠ 0
                 if target_val != 0:
                     if target_val == 1:
                         target_symbol = "🟢"
@@ -98,7 +95,7 @@ class DataLogger:
                     print(f"💾 {target_symbol} SAVED #{self.logged_count}: target={target_val}")
                 
         except Exception as e:
-            pass  # 🔇 Без вывода ошибок
+            pass
 
 # Глобальный экземпляр
 data_logger = DataLogger()
