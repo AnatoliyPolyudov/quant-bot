@@ -9,6 +9,7 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
 
 def load_training_data():
     """Загружает данные для обучения с улучшенной проверкой"""
@@ -62,8 +63,9 @@ def detailed_data_analysis(df):
     
     # Анализ признаков
     print(f"\n📈 Статистика признаков:")
-    feature_columns = ['order_book_imbalance', 'spread_percent', 'cumulative_delta', 
-                      'funding_rate', 'volatility']
+    
+    # 🔧 ИСПОЛЬЗУЕМ ПРИЗНАКИ ИЗ КОНФИГА
+    feature_columns = config.model.FEATURE_COLUMNS
     
     for feature in feature_columns:
         if feature in df_labeled.columns:
@@ -138,17 +140,8 @@ def train_ml_model(df):
     """Обучает ML модель с улучшенной обработкой"""
     print("\n🧠 ОБУЧЕНИЕ ML МОДЕЛИ...")
     
-    # Признаки для модели
-    feature_columns = [
-        'order_book_imbalance',
-        'spread_percent', 
-        'cumulative_delta',
-        'funding_rate',
-        'buy_trades',
-        'sell_trades', 
-        'total_trades',
-        'volatility'
-    ]
+    # 🔧 ИСПОЛЬЗУЕМ ПРИЗНАКИ ИЗ КОНФИГА
+    feature_columns = config.model.FEATURE_COLUMNS
     
     # Проверяем наличие всех признаков
     missing_features = [f for f in feature_columns if f not in df.columns]
@@ -168,22 +161,21 @@ def train_ml_model(df):
     print(f"📊 Данные для обучения: {len(X)} записей")
     print(f"🎯 Признаки: {feature_columns}")
     
-    if len(X) < 50:
-        print(f"❌ Недостаточно данных для обучения. Нужно минимум 50, сейчас: {len(X)}")
+    # 🔧 ИСПОЛЬЗУЕМ МИНИМАЛЬНОЕ КОЛИЧЕСТВО ЗАПИСЕЙ ИЗ КОНФИГА
+    if len(X) < config.model.MIN_TRAINING_RECORDS:
+        print(f"❌ Недостаточно данных для обучения. Нужно минимум {config.model.MIN_TRAINING_RECORDS}, сейчас: {len(X)}")
         return None
     
     # Обрабатываем дисбаланс классов
     class_weights = handle_class_imbalance(pd.DataFrame({'target': y}))
     
+    # 🔧 ИСПОЛЬЗУЕМ ПАРАМЕТРЫ МОДЕЛИ ИЗ КОНФИГА
+    model_params = config.model.RANDOM_FOREST_PARAMS.copy()
+    model_params['class_weight'] = class_weights
+    
     # Кросс-валидация с временными рядами
-    tscv = TimeSeriesSplit(n_splits=min(5, len(X) // 10))
-    model = RandomForestClassifier(
-        n_estimators=100,
-        random_state=42,
-        class_weight=class_weights,
-        max_depth=10,
-        min_samples_split=5
-    )
+    tscv = TimeSeriesSplit(n_splits=min(config.model.CROSS_VALIDATION_SPLITS, len(X) // 10))
+    model = RandomForestClassifier(**model_params)
     
     # Кросс-валидация
     print("📊 Запуск кросс-валидации...")
@@ -217,25 +209,32 @@ def train_ml_model(df):
     
     return model, feature_columns
 
-def save_model(model, feature_columns, filename="models/quant_model.pkl"):
+def save_model(model, feature_columns):
     """Сохраняет обученную модель и метаданные"""
+    # 🔧 ИСПОЛЬЗУЕМ ПУТИ ИЗ КОНФИГА
+    model_path = config.model.MODEL_PATH
+    metadata_path = config.model.METADATA_PATH
+    
     os.makedirs("models", exist_ok=True)
     
     # Сохраняем модель
-    joblib.dump(model, filename)
+    joblib.dump(model, model_path)
     
     # Сохраняем метаданные
     metadata = {
         'feature_columns': feature_columns,
-        'model_type': 'RandomForest',
+        'model_type': config.model.MODEL_TYPE,
         'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'classes': model.classes_.tolist() if hasattr(model, 'classes_') else []
+        'classes': model.classes_.tolist() if hasattr(model, 'classes_') else [],
+        'training_records': len(model.estimators_[0].classes_) if hasattr(model, 'estimators_') else 0,
+        'config_version': config.VERSION
     }
-    joblib.dump(metadata, "models/model_metadata.pkl")
+    joblib.dump(metadata, metadata_path)
     
-    print(f"💾 Модель сохранена: {filename}")
-    print(f"📝 Метаданные сохранены: models/model_metadata.pkl")
+    print(f"💾 Модель сохранена: {model_path}")
+    print(f"📝 Метаданные сохранены: {metadata_path}")
     print(f"🎯 Классы модели: {metadata['classes']}")
+    print(f"🔧 Версия конфигурации: {metadata['config_version']}")
 
 def plot_feature_importance(model, feature_columns):
     """Визуализирует важность признаков"""
@@ -258,6 +257,7 @@ def plot_feature_importance(model, feature_columns):
 
 def main():
     print("🚀 ЗАПУСК ОБУЧЕНИЯ МОДЕЛИ...")
+    print(f"🔧 Конфигурация: {config.VERSION} ({config.ENVIRONMENT})")
     
     # Загружаем данные
     df = load_training_data()
@@ -274,7 +274,8 @@ def main():
     create_baseline_model(df_labeled)
     
     # ML модель (если достаточно данных)
-    if len(df_labeled) >= 30:
+    # 🔧 ИСПОЛЬЗУЕМ МИНИМАЛЬНОЕ КОЛИЧЕСТВО ЗАПИСЕЙ ИЗ КОНФИГА
+    if len(df_labeled) >= config.model.MIN_TRAINING_RECORDS:
         print(f"\n🔧 Обучение на {len(df_labeled)} записях...")
         result = train_ml_model(df_labeled)
         if result:
@@ -282,10 +283,12 @@ def main():
             save_model(model, feature_columns)
             plot_feature_importance(model, feature_columns)
             print("\n🎉 Обучение завершено! Модель готова к использованию.")
+            print(f"💡 Для тестирования запустите: python main.py --mode=predict")
         else:
             print("❌ Ошибка обучения модели")
     else:
-        print(f"📊 Продолжайте сбор данных. Сейчас: {len(df_labeled)}/30")
+        needed = config.model.MIN_TRAINING_RECORDS - len(df_labeled)
+        print(f"📊 Продолжайте сбор данных. Нужно еще {needed} записей (сейчас: {len(df_labeled)}/{config.model.MIN_TRAINING_RECORDS})")
 
 if __name__ == "__main__":
     main()
