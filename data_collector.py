@@ -19,7 +19,7 @@ class OKXDataCollector:
             
             # Обрабатываем разные типы сообщений
             if 'event' in data:
-                print(f"⚡ Event: {data['event']}")
+                print(f"⚡ Event: {data['event']} - {data.get('msg', '')}")
             elif 'data' in data:
                 channel = data.get('arg', {}).get('channel', 'unknown')
                 print(f"📥 [{self.message_count}] {channel}: {len(data['data'])} items")
@@ -42,19 +42,19 @@ class OKXDataCollector:
     def on_open(self, ws):
         print(f"🔌 WebSocket connected at {datetime.now()}")
         # Подписываемся на каналы
-        from config import CHANNELS
+        from config import CHANNELS, SYMBOL
         for channel in CHANNELS:
             subscribe_msg = {
                 "op": "subscribe",
                 "args": [
                     {
                         "channel": channel,
-                        "instId": "BTC-USDT-SWAP"
+                        "instId": SYMBOL
                     }
                 ]
             }
             ws.send(json.dumps(subscribe_msg))
-            print(f"📡 Subscribed to: {channel}")
+            print(f"📡 Subscribed to: {channel} for {SYMBOL}")
     
     def start(self):
         """Запуск сбора данных"""
