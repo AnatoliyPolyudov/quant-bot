@@ -150,20 +150,20 @@ class FeatureEngine:
             'features': features.copy()
         })
         
-        # ОЧИСТКА: оставляем только последние 200 записей
-        if len(self.price_history) > 200:
-            self.price_history = self.price_history[-200:]
+        # УВЕЛИЧИВАЕМ историю до 1000 записей
+        if len(self.price_history) > 1000:
+            self.price_history = self.price_history[-1000:]
         
-        # ОТЛАДКА: выводим размер истории
-        if len(self.price_history) % 50 == 0:
-            print(f"🔍 DEBUG: Price history size = {len(self.price_history)}, current_price = {current_price}")
+        # УМЕНЬШАЕМ частоту отладки (только каждые 100 записей)
+        if len(self.price_history) % 100 == 0:
+            oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
+            print(f"🔍 DEBUG: History size = {len(self.price_history)}, oldest age = {oldest_age:.1f}s")
         
-        # РАСЧЕТ TARGET: для всех записей старше 30 секунд
-        thirty_sec_ago = current_time - timedelta(seconds=30)
-        target_updated = False
+        # РАСЧЕТ TARGET: для записей старше 20 секунд (уменьшаем для теста)
+        twenty_sec_ago = current_time - timedelta(seconds=20)
         
         for data_point in self.price_history:
-            if (data_point['timestamp'] <= thirty_sec_ago and 
+            if (data_point['timestamp'] <= twenty_sec_ago and 
                 'target' not in data_point['features']):
                 
                 future_price = current_price
@@ -171,21 +171,13 @@ class FeatureEngine:
                 
                 target = self.calculate_target(current_price_at_time, future_price)
                 data_point['features']['target'] = target
-                target_updated = True
                 self.target_calculated_count += 1
                 
                 # Логируем ВСЕГДА
                 price_change = (future_price - current_price_at_time) / current_price_at_time * 100
                 print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
                 
-                # Возвращаем обновленные фичи для сохранения
                 return data_point['features']
-        
-        # Если target не рассчитан, выводим отладку
-        if not target_updated and len(self.price_history) > 30:
-            oldest_record = self.price_history[0]
-            age_seconds = (current_time - oldest_record['timestamp']).total_seconds()
-            print(f"⏳ DEBUG: Oldest record age = {age_seconds:.1f}s, waiting for 30s threshold")
         
         return None
     
