@@ -10,21 +10,26 @@ class FeatureEngine:
         self.feature_history = []
         self.price_debug_count = 0
         self.target_calculated_count = 0
+        self.last_update_time = 0
+        self.update_interval = 1  # Обновлять фичи только раз в секунду
         
     def calculate_order_book_imbalance(self, order_book_data):
         """Рассчитывает imbalance из стакана"""
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0.5
-            if 'asks' not in order_book_data[0] or 'bids' not in order_book_data[0]:
+            book = order_book_data[0]
+            
+            # Проверяем структуру данных OKX
+            if 'bids' not in book or 'asks' not in book:
                 return 0.5
-            if len(order_book_data[0]['bids']) == 0 or len(order_book_data[0]['asks']) == 0:
+            if len(book['bids']) == 0 or len(book['asks']) == 0:
                 return 0.5
                 
-            book = order_book_data[0]
             bids = book['bids']
             asks = book['asks']
             
+            # Берем только первые 3 уровня
             bid_levels = min(len(bids), 3)
             ask_levels = min(len(asks), 3)
             
@@ -39,6 +44,7 @@ class FeatureEngine:
             return imbalance
             
         except Exception as e:
+            print(f"❌ Order book error: {e}")
             return 0.5
     
     def calculate_spread(self, order_book_data):
@@ -46,12 +52,13 @@ class FeatureEngine:
         try:
             if not order_book_data or len(order_book_data) == 0:
                 return 0
-            if 'asks' not in order_book_data[0] or 'bids' not in order_book_data[0]:
+            book = order_book_data[0]
+            
+            if 'bids' not in book or 'asks' not in book:
                 return 0
-            if len(order_book_data[0]['bids']) == 0 or len(order_book_data[0]['asks']) == 0:
+            if len(book['bids']) == 0 or len(book['asks']) == 0:
                 return 0
                 
-            book = order_book_data[0]
             best_bid = float(book['bids'][0][0])
             best_ask = float(book['asks'][0][0])
             
@@ -61,6 +68,7 @@ class FeatureEngine:
             return spread_percent
             
         except Exception as e:
+            print(f"❌ Spread calculation error: {e}")
             return 0
     
     def update_cumulative_delta(self, trade_data):
@@ -70,17 +78,19 @@ class FeatureEngine:
                 return self.cumulative_delta
                 
             for trade in trade_data:
-                if 'side' in trade:
+                if 'side' in trade and 'sz' in trade:
+                    size = float(trade['sz'])
                     if trade['side'] == 'buy':
-                        self.cumulative_delta += float(trade.get('sz', 0))
+                        self.cumulative_delta += size
                         self.trade_counts['buy'] += 1
                     elif trade['side'] == 'sell':
-                        self.cumulative_delta -= float(trade.get('sz', 0))
+                        self.cumulative_delta -= size
                         self.trade_counts['sell'] += 1
                     
             return self.cumulative_delta
             
         except Exception as e:
+            print(f"❌ Cumulative delta error: {e}")
             return self.cumulative_delta
     
     def extract_funding_rate(self, ticker_data):
@@ -91,7 +101,8 @@ class FeatureEngine:
             ticker = ticker_data[0]
             funding_rate = float(ticker.get('fundingRate', 0))
             return funding_rate
-        except:
+        except Exception as e:
+            print(f"❌ Funding rate error: {e}")
             return 0
     
     def get_current_price(self, ticker_data):
@@ -103,23 +114,20 @@ class FeatureEngine:
             ticker = ticker_data[0]
             
             # Пробуем разные поля где может быть цена
-            if 'last' in ticker and ticker['last']:
-                price = float(ticker['last'])
-            elif 'lastPrice' in ticker and ticker['lastPrice']:
-                price = float(ticker['lastPrice']) 
-            elif 'close' in ticker and ticker['close']:
-                price = float(ticker['close'])
-            elif 'askPx' in ticker and 'bidPx' in ticker:
-                # Берем среднюю между лучшими ценами
-                price = (float(ticker['askPx']) + float(ticker['bidPx'])) / 2
-            elif 'markPx' in ticker:
-                price = float(ticker['markPx'])
-            else:
-                return 0
+            price_fields = ['last', 'lastPrice', 'close', 'markPx']
+            for field in price_fields:
+                if field in ticker and ticker[field]:
+                    return float(ticker[field])
             
-            return price
+            # Если нет прямой цены, пробуем mid price
+            if 'askPx' in ticker and 'bidPx' in ticker:
+                if ticker['askPx'] and ticker['bidPx']:
+                    return (float(ticker['askPx']) + float(ticker['bidPx'])) / 2
+            
+            return 0
             
         except Exception as e:
+            print(f"❌ Price extraction error: {e}")
             return 0
     
     def calculate_target(self, current_price, future_price, threshold=0.05):
@@ -136,12 +144,27 @@ class FeatureEngine:
         else:
             return 0
     
+    def should_update_features(self):
+        """Проверяет, нужно ли обновлять фичи (ограничение частоты)"""
+        current_time = time.time()
+        if current_time - self.last_update_time >= self.update_interval:
+            self.last_update_time = current_time
+            return True
+        return False
+    
     def update_price_history(self, current_price, features):
-        """Обновляет историю цен и фичей"""
+        """Обновляет историю цен и фичей (с ограничением частоты)"""
         if current_price == 0:
             return None
             
         current_time = datetime.now()
+        
+        # ОГРАНИЧЕНИЕ: добавляем в историю только если прошло достаточно времени
+        if len(self.price_history) > 0:
+            last_time = self.price_history[-1]['timestamp']
+            time_diff = (current_time - last_time).total_seconds()
+            if time_diff < 0.5:  # Не чаще чем раз в 0.5 секунды
+                return None
         
         # Сохраняем текущие данные
         self.price_history.append({
@@ -150,19 +173,19 @@ class FeatureEngine:
             'features': features.copy()
         })
         
-        # УВЕЛИЧИВАЕМ историю до 1000 записей
-        if len(self.price_history) > 1000:
-            self.price_history = self.price_history[-1000:]
+        # Ограничиваем историю до 500 записей (вместо 1000)
+        if len(self.price_history) > 500:
+            self.price_history = self.price_history[-500:]
         
-        # УМЕНЬШАЕМ частоту отладки (только каждые 100 записей)
-        if len(self.price_history) % 100 == 0:
+        # РЕДКИЙ дебаг: только каждые 50 записей
+        if len(self.price_history) % 50 == 0:
             oldest_age = (current_time - self.price_history[0]['timestamp']).total_seconds()
             print(f"🔍 DEBUG: History size = {len(self.price_history)}, oldest age = {oldest_age:.1f}s")
         
-        # РАСЧЕТ TARGET: для записей старше 20 секунд (уменьшаем для теста)
+        # РАСЧЕТ TARGET: для записей старше 20 секунд
         twenty_sec_ago = current_time - timedelta(seconds=20)
         
-        for data_point in self.price_history:
+        for i, data_point in enumerate(self.price_history):
             if (data_point['timestamp'] <= twenty_sec_ago and 
                 'target' not in data_point['features']):
                 
@@ -173,16 +196,26 @@ class FeatureEngine:
                 data_point['features']['target'] = target
                 self.target_calculated_count += 1
                 
-                # Логируем ВСЕГДА
-                price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
+                # Логируем только значимые target
+                if target != 0:
+                    price_change = (future_price - current_price_at_time) / current_price_at_time * 100
+                    print(f"🎯 TARGET CALCULATED [{self.target_calculated_count}]: {target} (change: {price_change:.3f}%)")
                 
                 return data_point['features']
         
         return None
     
     def get_all_features(self, order_book_data, trade_data, ticker_data):
-        """Собирает все фичи вместе"""
+        """Собирает все фичи вместе (с ограничением частоты)"""
+        
+        # ОГРАНИЧЕНИЕ ЧАСТОТЫ: обновляем не чаще чем раз в секунду
+        if not self.should_update_features():
+            # Возвращаем последние фичи вместо вычисления новых
+            if self.price_history:
+                return self.price_history[-1]['features']
+            else:
+                return self.create_empty_features()
+        
         self.update_cumulative_delta(trade_data)
         
         current_price = self.get_current_price(ticker_data)
@@ -206,6 +239,21 @@ class FeatureEngine:
             return updated_features
         
         return features
+    
+    def create_empty_features(self):
+        """Создает пустые фичи когда обновление не нужно"""
+        return {
+            'timestamp': datetime.now().isoformat(),
+            'order_book_imbalance': 0.5,
+            'spread_percent': 0,
+            'cumulative_delta': self.cumulative_delta,
+            'funding_rate': 0,
+            'buy_trades': self.trade_counts['buy'],
+            'sell_trades': self.trade_counts['sell'],
+            'total_trades': self.trade_counts['buy'] + self.trade_counts['sell'],
+            'current_price': 0,
+            'target': 0
+        }
 
 # Глобальный экземпляр
 feature_engine = FeatureEngine()
