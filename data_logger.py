@@ -83,57 +83,35 @@ class DataLogger:
         return str_value
     
     def is_valid_features(self, features):
-        """🔧 УМЯГЧЕННАЯ проверка валидности фич"""
+        """🔧 ОЧЕНЬ МЯГКАЯ проверка - сохраняем ВСЕ данные"""
         try:
             self.data_quality_stats['total_attempted'] += 1
             
-            # Проверяем наличие обязательных полей
-            required_fields = ['order_book_imbalance', 'spread_percent', 'current_price']
+            # 🔧 МИНИМАЛЬНЫЕ ПРОВЕРКИ - только самые критические
+            
+            # Проверяем только самые основные поля
+            required_fields = ['current_price', 'order_book_imbalance']
             for field in required_fields:
                 if field not in features:
                     if self.data_quality_stats['total_attempted'] <= 5:
                         print(f"❌ Отсутствует поле: {field}")
                     return False
             
-            # 🔧 УМЯГЧЕННЫЕ ПРОВЕРКИ ДИАПАЗОНОВ
-            
-            spread = features.get('spread_percent', 0)
-            if spread > 5.0 or spread < 0:  # 🔧 Увеличил с 1.0 до 5.0
-                if self.data_quality_stats['total_attempted'] <= 5:
-                    print(f"❌ Невалидный спред: {spread}")
-                return False
-            
-            imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.01 or imbalance > 0.99:  # 🔧 Расширил диапазон
-                if self.data_quality_stats['total_attempted'] <= 5:
-                    print(f"❌ Невалидный imbalance: {imbalance}")
-                return False
-            
             price = features.get('current_price', 0)
-            if price < 5000 or price > 200000:  # 🔧 Расширил диапазон
+            if price <= 0 or price > 500000:  # 🔧 Только явно невалидные цены
                 if self.data_quality_stats['total_attempted'] <= 5:
                     print(f"❌ Невалидная цена: {price}")
                 return False
             
-            delta = abs(features.get('cumulative_delta', 0))
-            if delta > 100000:  # 🔧 Увеличил лимит
-                if self.data_quality_stats['total_attempted'] <= 5:
-                    print(f"❌ Слишком большая дельта: {delta}")
-                return False
+            # 🔧 УБИРАЕМ ВСЕ ОСТАЛЬНЫЕ ПРОВЕРКИ
+            # spread, imbalance, delta, volatility - принимаем любые значения
             
-            volatility = features.get('volatility', 0)
-            if volatility < 0 or volatility > 50:  # 🔧 Увеличил лимит
-                if self.data_quality_stats['total_attempted'] <= 5:
-                    print(f"❌ Невалидная волатильность: {volatility}")
-                return False
+            # 🔧 ДЕБАГ: покажем что сохраняем
+            if self.data_quality_stats['total_attempted'] <= 10:
+                print(f"💾 ACCEPTING data #{self.data_quality_stats['total_attempted']}: "
+                      f"price={price}, imbalance={features.get('order_book_imbalance', 0):.3f}")
             
-            # 🔧 ДОБАВИЛ ДЕБАГ ДЛЯ ПОНИМАНИЯ ПРОБЛЕМ
-            if self.data_quality_stats['total_attempted'] <= 3:
-                print(f"🔍 ДЕБАГ фич #{self.data_quality_stats['total_attempted']}:")
-                print(f"   price: {price}, spread: {spread}, imbalance: {imbalance}")
-                print(f"   delta: {delta}, volatility: {volatility}")
-            
-            return True
+            return True  # 🔧 Принимаем почти все данные!
             
         except Exception as e:
             if self.data_quality_stats['total_attempted'] <= 5:
@@ -141,52 +119,45 @@ class DataLogger:
             return False
     
     def is_noisy_data(self, features):
-        """🔧 УМЯГЧЕННАЯ проверка на зашумленность"""
+        """🔧 ОЧЕНЬ МЯГКАЯ проверка на шум"""
         try:
-            # 🔧 ВРЕМЕННО ОТКЛЮЧИМ СЛИШКОМ СТРОГУЮ ПРОВЕРКУ
             price = features.get('current_price', 0)
-            spread = features.get('spread_percent', 0)
-            
-            # Только самые критические проверки
+            # 🔧 Только полный крах данных
             if price <= 0:
                 return True
-                
-            if spread > 10.0:  # 🔧 Увеличил порог
-                return True
-                
-            return False
+            return False  # 🔧 Все остальное принимаем
             
         except Exception as e:
-            return True
+            return False
     
     def calculate_data_quality_score(self, features):
         """Рассчитывает оценку качества данных"""
         score = 100  # Начальная оценка
         
         try:
-            # 🔧 УМЯГЧЕННЫЕ ШТРАФЫ
+            # 🔧 ОЧЕНЬ МЯГКИЕ ШТРАФЫ
             spread = features.get('spread_percent', 0)
-            if spread > 0.1:
+            if spread > 0.5:
+                score -= 20
+            elif spread > 0.1:
                 score -= 10
-            elif spread > 0.05:
-                score -= 5
                 
             imbalance = features.get('order_book_imbalance', 0.5)
-            if imbalance < 0.3 or imbalance > 0.7:
+            if imbalance < 0.1 or imbalance > 0.9:
                 score -= 10
                 
             volatility = features.get('volatility', 0)
-            if volatility > 5.0:
+            if volatility > 10.0:
                 score -= 10
                 
             # Бонус за хорошие данные
-            if 0.4 <= imbalance <= 0.6 and spread < 0.02:
-                score += 15
+            if 0.3 <= imbalance <= 0.7 and spread < 0.05:
+                score += 20
                 
             return max(0, min(100, score))
             
         except Exception as e:
-            return 50  # 🔧 Средняя оценка при ошибке
+            return 80  # 🔧 Высокая оценка при ошибке
     
     def log_raw_data(self, features):
         """Логирует сырые данные для бэкапа с защитой CSV"""
