@@ -9,8 +9,9 @@ class DataLogger:
         self.data_file = "data/training_data.csv"
         self.setup_data_file()
         self.last_log_time = 0
-        self.log_interval = 10  # Уменьшено до 10 секунд
+        self.log_interval = 5  # Логировать каждые 5 секунд
         self.logged_count = 0
+        self.last_target_value = None
     
     def setup_data_file(self):
         """Создает файл данных с заголовками включая target"""
@@ -34,17 +35,20 @@ class DataLogger:
             print("📁 Created new training_data.csv")
     
     def log_features(self, features):
-        """Сохраняет фичи в CSV КАЖДЫЕ 10 СЕКУНД"""
+        """Сохраняет фичи в CSV КАЖДЫЕ 5 СЕКУНД"""
         try:
             current_time = time.time()
+            current_target = features.get('target', 0)
             
-            # ДИАГНОСТИКА: показываем что получаем
-            if self.logged_count == 0 and features.get('target', 0) != 0:
-                print(f"🔍 DEBUG: First target received: {features['target']}")
+            # ДИАГНОСТИКА: показываем первый target
+            if current_target != 0 and self.last_target_value != current_target:
+                print(f"🔍 TARGET DETECTED: {current_target}")
+                self.last_target_value = current_target
             
-            # Логируем только каждые 10 секунд И если есть target
+            # Логируем если: прошло 5+ секунд И есть target И target изменился
             if (current_time - self.last_log_time >= self.log_interval and 
-                features.get('target', 0) != 0):
+                current_target != 0 and 
+                current_target != self.last_target_value):
                 
                 self.last_log_time = current_time
                 self.logged_count += 1
@@ -63,7 +67,8 @@ class DataLogger:
                         features['current_price'],
                         features['target']
                     ])
-                print(f"💾 Data logged #{self.logged_count}: target={features['target']}")
+                print(f"💾 DATA SAVED #{self.logged_count}: target={features['target']}")
+                self.last_target_value = current_target
                 
         except Exception as e:
             print(f"❌ Data logging error: {e}")
