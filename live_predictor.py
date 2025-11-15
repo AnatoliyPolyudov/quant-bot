@@ -3,35 +3,48 @@ import joblib
 import pandas as pd
 from datetime import datetime
 import time
+import os
 from data_collector import data_collector
 from feature_engine import feature_engine
-import os
+from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
 
 class LivePredictor:
     def __init__(self):
         self.model = None
-        self.feature_columns = [
-            'order_book_imbalance', 'spread_percent', 'cumulative_delta',
-            'funding_rate', 'buy_trades', 'sell_trades', 'total_trades'
-        ]
+        
+        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ МОДЕЛИ
+        self.model_path = config.model.MODEL_PATH
+        self.feature_columns = config.model.FEATURE_COLUMNS
+        self.min_probability = config.model.MIN_PROBABILITY
+        self.confidence_threshold = config.model.CONFIDENCE_THRESHOLD
+        
         self.prediction_count = 0
         self.load_model()
         
     def load_model(self):
         """Загружает модель с проверкой"""
         try:
-            model_path = "models/quant_model.pkl"
-            if not os.path.exists(model_path):
-                print("❌ Модель не найдена. Запустите train_model.py сначала.")
+            # 🔧 ИСПОЛЬЗУЕМ ПУТЬ ИЗ КОНФИГА
+            if not os.path.exists(self.model_path):
+                print(f"❌ Модель не найдена: {self.model_path}")
+                print("💡 Запустите train_model.py сначала для обучения модели")
                 return
                 
-            self.model = joblib.load(model_path)
-            print("✅ Модель успешно загружена")
+            self.model = joblib.load(self.model_path)
+            print(f"✅ Модель успешно загружена: {self.model_path}")
             
             # Проверяем классы модели
             if hasattr(self.model, 'classes_'):
                 print(f"🎯 Классы модели: {self.model.classes_}")
                 
+            # 🔧 ПРОВЕРЯЕМ СООТВЕТСТВИЕ ПРИЗНАКОВ
+            if hasattr(self.model, 'feature_names_in_'):
+                expected_features = list(self.model.feature_names_in_)
+                available_features = self.feature_columns
+                missing_features = set(expected_features) - set(available_features)
+                if missing_features:
+                    print(f"⚠️  Предупреждение: в модели есть признаки, которых нет в конфиге: {missing_features}")
+            
         except Exception as e:
             print(f"❌ Ошибка загрузки модели: {e}")
             self.model = None
@@ -39,7 +52,7 @@ class LivePredictor:
     def make_prediction(self, features):
         """Делает предсказание с улучшенной диагностикой"""
         try:
-            # 🔧 ФИКС: Проверяем, что модель загружена
+            # Проверяем, что модель загружена
             if self.model is None:
                 return {
                     'prediction': 0,
@@ -49,7 +62,7 @@ class LivePredictor:
                     'error': 'Model not loaded'
                 }
             
-            # 🔧 ФИКС: Проверяем качество фич
+            # Проверяем качество фич
             if features.get('current_price', 0) == 0:
                 return {
                     'prediction': 0,
@@ -60,22 +73,22 @@ class LivePredictor:
                 }
             
             # Подготавливаем данные для модели
-            X = pd.DataFrame([[
-                features.get('order_book_imbalance', 0.5),
-                features.get('spread_percent', 0.01),
-                features.get('cumulative_delta', 0),
-                features.get('funding_rate', 0),
-                features.get('buy_trades', 0),
-                features.get('sell_trades', 0),
-                features.get('total_trades', 0)
-            ]], columns=self.feature_columns)
+            feature_data = []
+            for feature in self.feature_columns:
+                if feature in features:
+                    feature_data.append(features[feature])
+                else:
+                    print(f"⚠️  Отсутствует признак: {feature}")
+                    feature_data.append(0)  # Заполняем нулем
             
-            # 🔧 ФИКС: Проверяем данные на NaN
+            X = pd.DataFrame([feature_data], columns=self.feature_columns)
+            
+            # Проверяем данные на NaN
             if X.isnull().any().any():
                 print("❌ NaN values in features")
                 return None
             
-            # 🔧 ФИКС: Проверяем, что все фичи числовые
+            # Проверяем, что все фичи числовые
             for col in self.feature_columns:
                 if col in X.columns:
                     X[col] = pd.to_numeric(X[col], errors='coerce')
@@ -87,7 +100,7 @@ class LivePredictor:
             prediction = self.model.predict(X)[0]
             probabilities = self.model.predict_proba(X)[0]
             
-            # 🔧 ФИКС: Правильное определение confidence
+            # Правильное определение confidence
             confidence = max(probabilities) * 100
             predicted_class = prediction
             
@@ -103,13 +116,18 @@ class LivePredictor:
                         prob = probabilities[i] * 100
                         print(f"   Class {cls}: {prob:.1f}%")
                 print(f"   Final prediction: {predicted_class}, confidence: {confidence:.1f}%")
+                
+                # 🔧 ПРОВЕРКА ПОРОГА УВЕРЕННОСТИ
+                if confidence < self.confidence_threshold * 100:
+                    print(f"   ⚠️  Низкая уверенность ({confidence:.1f}% < {self.confidence_threshold * 100:.1f}%)")
             
             return {
                 'prediction': predicted_class,
                 'probability': max(probabilities),
                 'confidence': f"{confidence:.1f}%",
                 'timestamp': datetime.now().strftime("%H:%M:%S"),
-                'probabilities': probabilities.tolist() if hasattr(probabilities, 'tolist') else probabilities
+                'probabilities': probabilities.tolist() if hasattr(probabilities, 'tolist') else probabilities,
+                'raw_confidence': confidence
             }
             
         except Exception as e:
@@ -138,12 +156,17 @@ class LivePredictor:
                 'funding_rate': 0.0001,
                 'buy_trades': 10,
                 'sell_trades': 5,
-                'total_trades': 15
+                'total_trades': 15,
+                'volatility': 0.5
             }
             
             test_pred = self.make_prediction(test_features)
             if test_pred and 'error' not in test_pred:
-                return f"✅ Модель работает (тест: {test_pred['prediction']})"
+                confidence = test_pred.get('raw_confidence', 0)
+                if confidence >= self.confidence_threshold * 100:
+                    return f"✅ Модель работает (тест: {test_pred['prediction']}, уверенность: {confidence:.1f}%)"
+                else:
+                    return f"⚠️  Модель работает, но низкая уверенность: {confidence:.1f}%"
             else:
                 return "❌ Ошибка тестового предсказания"
                 
@@ -154,6 +177,13 @@ class LivePredictor:
         """Запускает предсказания в реальном времени"""
         print("🎯 LIVE ML PREDICTIONS STARTED...")
         print("=" * 60)
+        
+        # 🔧 ИНФОРМАЦИЯ О КОНФИГУРАЦИИ
+        print(f"🔧 Конфигурация модели:")
+        print(f"   Модель: {self.model_path}")
+        print(f"   Признаки: {len(self.feature_columns)}")
+        print(f"   Минимальная вероятность: {self.min_probability}")
+        print(f"   Порог уверенности: {self.confidence_threshold}")
         
         # Проверяем модель
         health_status = self.check_model_health()
@@ -166,6 +196,7 @@ class LivePredictor:
         
         last_print_time = 0
         consecutive_holds = 0
+        low_confidence_count = 0
         
         while True:
             current_time = time.time()
@@ -184,6 +215,16 @@ class LivePredictor:
                 prediction = self.make_prediction(features)
                 
                 if prediction and 'error' not in prediction:
+                    # 🔧 ПРОВЕРКА МИНИМАЛЬНОЙ ВЕРОЯТНОСТИ
+                    probability = prediction.get('probability', 0)
+                    raw_confidence = prediction.get('raw_confidence', 0)
+                    
+                    if probability < self.min_probability:
+                        prediction['prediction'] = 0  # Принудительно HOLD
+                        low_confidence_count += 1
+                    else:
+                        low_confidence_count = 0
+                    
                     # Определяем цвет и символ для предсказания
                     if prediction['prediction'] == 1:
                         symbol = "🟢 LONG"
@@ -198,13 +239,18 @@ class LivePredictor:
                         color = "\033[90m"  # Серый
                         consecutive_holds += 1
                     
-                    # 🔧 ФИКС: Предупреждение о многих HOLD подряд
+                    # Предупреждение о многих HOLD подряд
                     hold_warning = ""
                     if consecutive_holds > 5:
                         hold_warning = " ⚠️ MANY HOLDS"
                     
+                    # Предупреждение о низкой уверенности
+                    confidence_warning = ""
+                    if probability < self.min_probability:
+                        confidence_warning = " 📉 LOW CONFIDENCE"
+                    
                     # Вывод предсказания
-                    print(f"{color}🎯 [{prediction['timestamp']}] {symbol} | Confidence: {prediction['confidence']}{hold_warning}")
+                    print(f"{color}🎯 [{prediction['timestamp']}] {symbol} | Confidence: {prediction['confidence']}{hold_warning}{confidence_warning}")
                     print(f"   📊 Imbalance: {features.get('order_book_imbalance', 0):.3f} | "
                           f"Delta: {features.get('cumulative_delta', 0):.1f} | "
                           f"Volatility: {features.get('volatility', 0):.3f}%")
@@ -214,7 +260,7 @@ class LivePredictor:
                     baseline = baseline_strategy.analyze_signal(features)
                     print(f"   🤖 Baseline: {baseline['decision']} ({baseline['confidence']:.0f}%)")
                     
-                    # 🔧 ДИАГНОСТИКА: Показываем вероятности для ненулевых предсказаний
+                    # ДИАГНОСТИКА: Показываем вероятности для ненулевых предсказаний
                     if prediction['prediction'] != 0 and 'probabilities' in prediction:
                         probs = prediction['probabilities']
                         if hasattr(self.model, 'classes_'):
