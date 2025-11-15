@@ -258,6 +258,18 @@ class FeatureEngine:
         if targets_calculated > 0:
             print(f"✅ Calculated {targets_calculated} targets, total: {self.target_calculated_count}")
             
+            # ДИАГНОСТИКА: принудительно логируем первый target
+            if self.target_calculated_count == 1:
+                try:
+                    from data_logger import data_logger
+                    for data_point in reversed(self.price_history):
+                        if 'target' in data_point['features']:
+                            print("🚨 FORCING FIRST DATA LOG...")
+                            data_logger.log_features(data_point['features'])
+                            break
+                except Exception as e:
+                    print(f"❌ Force log error: {e}")
+            
             # Возвращаем последние фичи с target
             for data_point in reversed(self.price_history):
                 if 'target' in data_point['features']:
