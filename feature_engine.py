@@ -12,8 +12,8 @@ class FeatureEngine:
         self.last_update_time = 0
         self.update_interval = 1
         self.last_history_debug = 0
-        self.target_horizon = 10
-        self.target_threshold = 0.03  # Уменьшено до 0.03%
+        self.target_horizon = 8        # 🔧 Уменьшено до 8 секунд
+        self.target_threshold = 0.01   # 🔧 Уменьшено до 0.01%
         self.trade_history = []
         self.volatility_window = 30
         self.ob_debug_shown = False
@@ -192,15 +192,15 @@ class FeatureEngine:
             return 0
     
     def calculate_target(self, current_price, future_price):
-        """Рассчитывает target"""
+        """Рассчитывает target с улучшенным порогом"""
         if current_price == 0 or future_price == 0:
             return 0
             
         price_change = (future_price - current_price) / current_price * 100
         
-        if price_change > self.target_threshold:
+        if price_change > self.target_threshold:    # 0.01%
             return 1
-        elif price_change < -self.target_threshold:
+        elif price_change < -self.target_threshold: # -0.01%
             return -1
         else:
             return 0
@@ -226,9 +226,6 @@ class FeatureEngine:
         #     time_diff = (current_time - last_time).total_seconds()
         #     if time_diff < 0.5:
         #         return None
-        
-        # 🔧 ДОБАВЛЕНО: диагностика добавления в историю
-        print(f"➕ ADDING TO HISTORY: price={current_price}, history_size={len(self.price_history)}")
         
         # Добавляем в историю
         self.price_history.append({
@@ -274,14 +271,15 @@ class FeatureEngine:
                 
                 # Логируем ВСЕ расчеты target
                 price_change = (future_price - current_price_at_time) / current_price_at_time * 100
-                print(f"🎯 CALCULATED: {target} (change: {price_change:.3f}%)")
+                if target != 0:  # 🔧 Логируем только ненулевые target
+                    print(f"🎯 TARGET: {target} (change: {price_change:.3f}%)")
         
         if targets_calculated > 0:
             print(f"✅ Calculated {targets_calculated} targets")
             
             # Возвращаем фичи с target
             for data_point in reversed(self.price_history):
-                if 'target' in data_point['features']:
+                if 'target' in data_point['features'] and data_point['features']['target'] != 0:
                     return data_point['features']
         
         return None
