@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 import pandas as pd
-from config import config  # 🔧 ИМПОРТИРУЕМ НОВУЮ КОНФИГУРАЦИЮ
+from config import config
 
 class DataLogger:
     def __init__(self):
@@ -14,7 +14,7 @@ class DataLogger:
         self.logged_count = 0
         self.last_log_time = 0
         
-        # 🔧 ИСПОЛЬЗУЕМ КОНФИГУРАЦИЮ ДЛЯ ИНТЕРВАЛОВ
+        # Используем конфигурацию для интервалов
         self.log_interval = config.data.LOG_INTERVAL
         self.max_records = config.data.MAX_RECORDS
         
@@ -70,6 +70,16 @@ class DataLogger:
                     'log_type'
                 ])
             print("📁 Создан файл для сырых данных")
+    
+    def safe_csv_value(self, value):
+        """🔧 БЕЗОПАСНОЕ экранирование значений для CSV"""
+        if value is None:
+            return ''
+        str_value = str(value)
+        # Экранируем запятые, переносы строк и кавычки
+        if ',' in str_value or '\n' in str_value or '\r' in str_value or '"' in str_value:
+            return '"' + str_value.replace('"', '""') + '"'
+        return str_value
     
     def is_valid_features(self, features):
         """Улучшенная проверка валидности фич"""
@@ -162,31 +172,84 @@ class DataLogger:
             return 0
     
     def log_raw_data(self, features):
-        """Логирует сырые данные для бэкапа"""
+        """Логирует сырые данные для бэкапа с защитой CSV"""
         try:
+            # 🔧 БЕЗОПАСНАЯ подготовка данных
+            row_data = [
+                self.safe_csv_value(features.get('timestamp', '')),
+                self.safe_csv_value(features.get('order_book_imbalance', 0)),
+                self.safe_csv_value(features.get('spread_percent', 0)),
+                self.safe_csv_value(features.get('cumulative_delta', 0)),
+                self.safe_csv_value(features.get('funding_rate', 0)),
+                self.safe_csv_value(features.get('buy_trades', 0)),
+                self.safe_csv_value(features.get('sell_trades', 0)),
+                self.safe_csv_value(features.get('total_trades', 0)),
+                self.safe_csv_value(features.get('current_price', 0)),
+                self.safe_csv_value(features.get('volatility', 0)),
+                self.safe_csv_value(features.get('target', 0)),
+                'raw'
+            ]
+            
             with open(self.raw_data_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    features.get('timestamp', ''),
-                    features.get('order_book_imbalance', 0),
-                    features.get('spread_percent', 0),
-                    features.get('cumulative_delta', 0),
-                    features.get('funding_rate', 0),
-                    features.get('buy_trades', 0),
-                    features.get('sell_trades', 0),
-                    features.get('total_trades', 0),
-                    features.get('current_price', 0),
-                    features.get('volatility', 0),
-                    features.get('target', 0),
-                    'raw'
-                ])
+                writer.writerow(row_data)
         except Exception as e:
-            pass  # Молча игнорируем ошибки бэкапа
+            print(f"❌ Ошибка логирования сырых данных: {e}")
+    
+    def repair_data_file(self):
+        """🔧 ВОССТАНАВЛИВАЕТ поврежденный CSV файл"""
+        try:
+            if not os.path.exists(self.data_file):
+                return True
+                
+            print("🔧 Проверяем целостность файла данных...")
+            
+            # Пробуем загрузить файл
+            try:
+                df = pd.read_csv(self.data_file)
+                print(f"✅ Файл в порядке, записей: {len(df)}")
+                return True
+            except Exception as e:
+                print(f"⚠️ Файл поврежден, восстанавливаем...")
+                
+            # Создаем backup поврежденного файла
+            backup_file = f"{self.data_file}.backup_{int(time.time())}"
+            os.rename(self.data_file, backup_file)
+            print(f"📁 Создан backup: {backup_file}")
+            
+            # Читаем построчно и фильтруем корректные строки
+            good_rows = []
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader)  # Читаем заголовки
+                good_rows.append(headers)
+                
+                for i, row in enumerate(reader, start=2):
+                    if len(row) == len(headers):
+                        good_rows.append(row)
+                    else:
+                        print(f"⚠️ Пропущена строка {i}: неверное количество полей")
+            
+            # Записываем исправленный файл
+            with open(self.data_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerows(good_rows)
+            
+            print(f"✅ Файл восстановлен! Сохранено {len(good_rows)-1} записей")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка восстановления файла: {e}")
+            return False
     
     def log_features(self, features):
-        """Улучшенное логирование фич с контролем качества"""
+        """Улучшенное логирование фич с защитой от повреждения CSV"""
         try:
             current_time = time.time()
+            
+            # 🔧 ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ЦЕЛОСТНОСТИ ФАЙЛА
+            if self.logged_count % 50 == 0:
+                self.repair_data_file()
             
             # Всегда логируем сырые данные
             self.log_raw_data(features)
@@ -196,7 +259,7 @@ class DataLogger:
                 self.data_quality_stats['anomalies_detected'] += 1
                 return
             
-            # 🔧 ИСПОЛЬЗУЕМ ИНТЕРВАЛ ИЗ КОНФИГА
+            # Контроль частоты логирования
             if current_time - self.last_log_time < self.log_interval:
                 return
                 
@@ -207,25 +270,34 @@ class DataLogger:
             # Расчет качества данных
             quality_score = self.calculate_data_quality_score(features)
             
+            # 🔧 БЕЗОПАСНАЯ подготовка данных для CSV
+            row_data = [
+                self.safe_csv_value(features.get('timestamp', '')),
+                self.safe_csv_value(features.get('order_book_imbalance', 0)),
+                self.safe_csv_value(features.get('spread_percent', 0)),
+                self.safe_csv_value(features.get('cumulative_delta', 0)),
+                self.safe_csv_value(features.get('funding_rate', 0)),
+                self.safe_csv_value(features.get('buy_trades', 0)),
+                self.safe_csv_value(features.get('sell_trades', 0)),
+                self.safe_csv_value(features.get('total_trades', 0)),
+                self.safe_csv_value(features.get('current_price', 0)),
+                self.safe_csv_value(features.get('volatility', 0)),
+                self.safe_csv_value(features.get('target', 0)),
+                self.safe_csv_value(quality_score)
+            ]
+            
+            # Проверяем что количество полей соответствует заголовкам
+            expected_columns = 12
+            if len(row_data) != expected_columns:
+                print(f"❌ Ошибка: неверное количество полей {len(row_data)} != {expected_columns}")
+                return
+            
             # Логируем в основной файл
             with open(self.data_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    features.get('timestamp', ''),
-                    features.get('order_book_imbalance', 0),
-                    features.get('spread_percent', 0),
-                    features.get('cumulative_delta', 0),
-                    features.get('funding_rate', 0),
-                    features.get('buy_trades', 0),
-                    features.get('sell_trades', 0),
-                    features.get('total_trades', 0),
-                    features.get('current_price', 0),
-                    features.get('volatility', 0),
-                    features.get('target', 0),
-                    quality_score
-                ])
+                writer.writerow(row_data)
             
-            # 🔧 ПЕРИОДИЧЕСКАЯ ОЧИСТКА СТАРЫХ ДАННЫХ
+            # Периодическая очистка старых данных
             if self.logged_count % 100 == 0:
                 self.cleanup_old_data()
             
@@ -286,7 +358,16 @@ class DataLogger:
             if not os.path.exists(self.data_file):
                 return {'total_records': 0, 'labeled_records': 0}
             
-            df = pd.read_csv(self.data_file)
+            # 🔧 БЕЗОПАСНАЯ загрузка CSV
+            try:
+                df = pd.read_csv(self.data_file)
+            except:
+                # Если файл поврежден, восстанавливаем
+                if self.repair_data_file():
+                    df = pd.read_csv(self.data_file)
+                else:
+                    return {'total_records': 0, 'labeled_records': 0}
+            
             total_records = len(df)
             
             # Считаем размеченные записи (ненулевой target)
@@ -305,14 +386,21 @@ class DataLogger:
             return {'total_records': 0, 'labeled_records': 0}
     
     def cleanup_old_data(self):
-        """🔧 Очистка старых данных с использованием конфига"""
+        """Очистка старых данных с использованием конфига"""
         try:
             if not os.path.exists(self.data_file):
                 return
                 
-            df = pd.read_csv(self.data_file)
+            # 🔧 БЕЗОПАСНАЯ загрузка
+            try:
+                df = pd.read_csv(self.data_file)
+            except:
+                if self.repair_data_file():
+                    df = pd.read_csv(self.data_file)
+                else:
+                    return
             
-            # 🔧 ИСПОЛЬЗУЕМ МАКСИМАЛЬНОЕ КОЛИЧЕСТВО ЗАПИСЕЙ ИЗ КОНФИГА
+            # Используем максимальное количество записей из конфига
             if len(df) > self.max_records:
                 # Оставляем только последние записи
                 df = df.tail(self.max_records)
