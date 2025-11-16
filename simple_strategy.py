@@ -1,6 +1,8 @@
-# simple_strategy.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
+# simple_strategy.py - УМНЫЕ ВЫХОДЫ БЕЗ ШУМА
 import time
-from config import IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS
+from config import (IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, 
+                   MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS,
+                   EXIT_IMBALANCE_THRESHOLD, EXIT_DELTA_PER_MINUTE, MIN_HOLD_SECONDS)
 
 class SimpleStrategy:
     def __init__(self):
@@ -12,7 +14,6 @@ class SimpleStrategy:
 
     def analyze(self, features):
         imb = features.get("order_book_imbalance", 0.5)
-        avg_imb = features.get("avg_imbalance_5min", 0.5)
         imb_trend = features.get("imbalance_trend", "flat")
         delta = features.get("cumulative_delta", 0.0)
         delta_rate = features.get("delta_per_minute", 0.0)
@@ -23,21 +24,34 @@ class SimpleStrategy:
         if spread <= 0 or spread > SPREAD_MAX_PCT:
             return {"action": "HOLD", "reason": "spread_bad", "confidence": 0}
 
-        # If open - check exit
+        # Если есть открытая позиция - УМНАЯ ЛОГИКА ВЫХОДА
         if self.open_position:
-            # time exit
-            if time.time() - self.open_position["entry_ts"] >= TRADE_HOLD_SECONDS:
+            current_time = time.time()
+            position_age = current_time - self.open_position["entry_ts"]
+            
+            # МИНИМАЛЬНОЕ ВРЕМЯ УДЕРЖАНИЯ - НЕ ВЫХОДИМ РАНЬШЕ 2 МИНУТ
+            if position_age < MIN_HOLD_SECONDS:
+                return {"action": "HOLD", "reason": "min_hold_time", "confidence": 0}
+            
+            # ВРЕМЕННОЙ ВЫХОД - после 5 минут
+            if position_age >= TRADE_HOLD_SECONDS:
                 return {"action": "EXIT", "reason": "time_exit", "side": self.open_position["side"], "price": price}
             
-            # reverse condition with new metrics
-            if self.open_position["side"] == "LONG" and (imb < 0.5 or delta < -DELTA_THRESHOLD or imb_trend == "falling"):
-                return {"action": "EXIT", "reason": "reverse", "side": "LONG", "price": price}
-            if self.open_position["side"] == "SHORT" and (imb > 0.5 or delta > DELTA_THRESHOLD or imb_trend == "rising"):
-                return {"action": "EXIT", "reason": "reverse", "side": "SHORT", "price": price}
+            # УМНЫЙ ВЫХОД ПО РАЗВОРОТУ - ТОЛЬКО ПРИ СИГНАЛАХ
+            if self.open_position["side"] == "LONG":
+                # Выход только при СИЛЬНОМ развороте
+                if imb < EXIT_IMBALANCE_THRESHOLD and delta_rate < EXIT_DELTA_PER_MINUTE:
+                    return {"action": "EXIT", "reason": "strong_reversal", "side": "LONG", "price": price}
+                    
+            elif self.open_position["side"] == "SHORT":
+                # Выход только при СИЛЬНОМ развороте  
+                if imb > (1.0 - EXIT_IMBALANCE_THRESHOLD) and delta_rate > -EXIT_DELTA_PER_MINUTE:
+                    return {"action": "EXIT", "reason": "strong_reversal", "side": "SHORT", "price": price}
+            
             return {"action": "HOLD", "reason": "position_open", "confidence": 0}
 
-        # No open - entry rules ДЛЯ 1-МИНУТКИ
-        # LONG: имбаланс > 0.64 И дельта > 4.5 И тренд растущий
+        # Нет открытой позиции - СТРОГИЕ УСЛОВИЯ ВХОДА
+        # LONG: имбаланс > 0.70 И дельта > 8.0 И тренд растущий
         if (imb > IMBALANCE_THRESHOLD and 
             delta > DELTA_THRESHOLD and 
             imb_trend == "rising" and 
@@ -47,11 +61,11 @@ class SimpleStrategy:
                 "action": "ENTER", 
                 "side": "LONG", 
                 "price": price, 
-                "confidence": 85, 
-                "reason": f"1min_imb_{imb}_delta_{delta}_trend_rising"
+                "confidence": 90, 
+                "reason": f"strong_long_imb_{imb}_delta_{delta}"
             }
         
-        # SHORT: имбаланс < 0.36 И дельта < -4.5 И тренд падающий  
+        # SHORT: имбаланс < 0.30 И дельта < -8.0 И тренд падающий  
         if (imb < (1.0 - IMBALANCE_THRESHOLD) and 
             delta < -DELTA_THRESHOLD and 
             imb_trend == "falling" and 
@@ -61,8 +75,8 @@ class SimpleStrategy:
                 "action": "ENTER", 
                 "side": "SHORT", 
                 "price": price, 
-                "confidence": 85, 
-                "reason": f"1min_imb_{imb}_delta_{delta}_trend_falling"
+                "confidence": 90, 
+                "reason": f"strong_short_imb_{imb}_delta_{delta}"
             }
 
         return {"action": "HOLD", "reason": "no_signal", "confidence": 0}
