@@ -1,10 +1,10 @@
-# main.py - FIXED FOR LIVE ONLY
+# main.py - FIXED IMPORTS
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
-from config import MODE, BUCKET_SECONDS, POSITION_PCT
+from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD  # ДОБАВЬ ИМПОРТЫ
 
 
 def run_bot():
