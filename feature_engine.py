@@ -1,4 +1,4 @@
-# feature_engine.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
+# feature_engine.py - БЫСТРЫЙ ТРЕНД ДЛЯ 2 МИНУТ
 from collections import deque
 import time
 from datetime import datetime
@@ -6,11 +6,10 @@ from datetime import datetime
 class FeatureEngine:
     def __init__(self):
         self.delta_deque = deque()
-        self.imbalance_history = []  # История имбаланса для 5-минутного усреднения
+        self.imbalance_history = deque(maxlen=2)  # ТОЛЬКО 2 последних значения для быстрого тренда
         self.trade_counts = {"buy": 0, "sell": 0}
         self.last_price = 60000.0
         self.delta_window_sec = 300  # 5 минут для дельты
-        self.imbalance_window = 5    # 5 последних значений для усреднения
 
     def _clean_old(self, now_ts):
         cutoff = now_ts - self.delta_window_sec
@@ -22,14 +21,14 @@ class FeatureEngine:
         bid_vol = 0.0
         ask_vol = 0.0
         
-        for b in bids[:3]:  # Топ 3 уровня
+        for b in bids[:3]:
             try:
                 if len(b) >= 2:
                     bid_vol += float(b[1])
             except:
                 pass
                 
-        for a in asks[:3]:  # Топ 3 уровня
+        for a in asks[:3]:
             try:
                 if len(a) >= 2:
                     ask_vol += float(a[1])
@@ -56,10 +55,8 @@ class FeatureEngine:
             # Calculate current imbalance
             current_imbalance = self._calculate_imbalance(bids, asks)
             
-            # Добавляем в историю для усреднения
+            # Сохраняем для быстрого тренда (2 значения)
             self.imbalance_history.append(current_imbalance)
-            if len(self.imbalance_history) > self.imbalance_window:
-                self.imbalance_history.pop(0)
             
             # Calculate spread
             try:
@@ -72,11 +69,11 @@ class FeatureEngine:
             except:
                 pass
 
-        # Усредненный имбаланс за 5 минут
-        avg_imbalance = sum(self.imbalance_history) / len(self.imbalance_history) if self.imbalance_history else current_imbalance
-        
-        # Тренд имбаланса
-        imbalance_trend = "rising" if avg_imbalance < current_imbalance else "falling" if avg_imbalance > current_imbalance else "flat"
+        # БЫСТРЫЙ ТРЕНД - по 2 последним значениям
+        if len(self.imbalance_history) >= 2:
+            imb_trend = "rising" if current_imbalance > list(self.imbalance_history)[-2] else "falling"
+        else:
+            imb_trend = "flat"
 
         # Update delta from trades
         for t in trades:
@@ -104,10 +101,9 @@ class FeatureEngine:
         features = {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
-            "avg_imbalance_5min": round(avg_imbalance, 4),  # НОВОЕ: усредненный имбаланс
-            "imbalance_trend": imbalance_trend,  # НОВОЕ: тренд имбаланса
+            "imbalance_trend": imb_trend,  # БЫСТРЫЙ тренд
             "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(delta_per_minute, 2),  # НОВОЕ: скорость дельты
+            "delta_per_minute": round(delta_per_minute, 2),
             "spread_percent": round(spread_pct, 6),
             "buy_trades": self.trade_counts["buy"],
             "sell_trades": self.trade_counts["sell"],
