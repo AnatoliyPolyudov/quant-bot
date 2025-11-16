@@ -58,86 +58,127 @@ for d in (DATA_DIR, LOGS_DIR, MODELS_DIR):
 ===== data_collector.py =====
 
 
-# data_collector.py
-# Simple collector: demo synthetic generator OR placeholder for live websocket
+import json
 import threading
+import websocket
 import time
-import random
 from datetime import datetime
-from config import MODE, DEMO_PRICE, DEMO_VOL
+from config import SYMBOL, MODE
 
-class DataCollector:
+class LiveDataCollector:
     def __init__(self):
-        self.order_book = None
-        self.trades = []
+        self.price = None
+        self.best_bid = None
+        self.best_ask = None
+        self.spread = None
+        self.delta = 0
+        self.last_buy_vol = 0
+        self.last_sell_vol = 0
+        self.trade_imbalance = 0
+
+        self.trades_buffer = []
         self.lock = threading.Lock()
-        self.running = False
-        self._thread = None
-        self._price = DEMO_PRICE
 
-    def start(self):
-        if self.running:
+        self._ws = None
+
+        print("[Collector] Initializing live mode...")
+        self._start_ws()
+
+    def _start_ws(self):
+        url = "wss://ws.okx.com:8443/ws/v5/public"
+        self._ws = websocket.WebSocketApp(
+            url,
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close
+        )
+
+        t = threading.Thread(target=self._ws.run_forever, daemon=True)
+        t.start()
+
+    def _on_open(self, ws):
+        print("[Collector] Connected to OKX WebSocket")
+
+        sub_msg = {
+            "op": "subscribe",
+            "args": [
+                {"channel": "books5", "instId": SYMBOL},
+                {"channel": "trades", "instId": SYMBOL}
+            ]
+        }
+        ws.send(json.dumps(sub_msg))
+        print("[Collector] Subscribed to books5 & trades")
+
+    def _on_error(self, ws, error):
+        print("[Collector] ERROR:", error)
+
+    def _on_close(self, ws, *args):
+        print("[Collector] WebSocket closed")
+
+    def _on_message(self, ws, message):
+        msg = json.loads(message)
+
+        if "arg" not in msg:
             return
-        self.running = True
-        if MODE == "demo":
-            self._thread = threading.Thread(target=self._demo_loop, daemon=True)
-            self._thread.start()
-        else:
-            # For live/sandbox - user should implement OKX websocket here.
-            self._thread = threading.Thread(target=self._live_stub_loop, daemon=True)
-            self._thread.start()
 
-    def stop(self):
-        self.running = False
-        if self._thread:
-            self._thread.join(timeout=1.0)
+        channel = msg["arg"]["channel"]
 
-    def _demo_loop(self):
-        """Generate synthetic orderbook and trades rapidly; feature engine will aggregate to bucket."""
-        while self.running:
-            # small random walk
-            self._price += random.gauss(0, DEMO_VOL)
-            mid = max(1.0, self._price)
+        if channel == "books5":
+            self._handle_books(msg)
 
-            # simple top-5 book
-            bids = []
-            asks = []
-            for i in range(5):
-                bids.append([round(mid - 0.5 - i*0.1 + random.uniform(-0.02,0.02), 2),
-                             round(random.uniform(0.1, 5.0), 4)])
-            for i in range(5):
-                asks.append([round(mid + 0.5 + i*0.1 + random.uniform(-0.02,0.02), 2),
-                             round(random.uniform(0.1, 5.0), 4)])
+        elif channel == "trades":
+            self._handle_trades(msg)
 
-            trades = []
-            for _ in range(random.randint(0,3)):
-                side = random.choice(["buy","sell"])
-                sz = round(random.expovariate(1.0),4)
-                trade_price = round(mid + random.uniform(-0.5,0.5), 2)
-                trades.append({"side": side, "sz": str(sz), "price": str(trade_price), "ts": datetime.utcnow().isoformat()})
+    def _handle_books(self, msg):
+        if "data" not in msg:
+            return
 
-            with self.lock:
-                self.order_book = {"bids": bids, "asks": asks, "ts": datetime.utcnow().isoformat()}
-                self.trades = trades
+        data = msg["data"][0]
 
-            time.sleep(0.25)
+        bid = float(data["bids"][0][0])
+        ask = float(data["asks"][0][0])
 
-    def _live_stub_loop(self):
-        """Placeholder — implement real websocket connection to OKX here."""
-        while self.running:
-            with self.lock:
-                self.order_book = None
-                self.trades = []
-            time.sleep(1.0)
+        with self.lock:
+            self.best_bid = bid
+            self.best_ask = ask
+            self.price = (bid + ask) / 2
+            self.spread = ask - bid
+
+    def _handle_trades(self, msg):
+        if "data" not in msg:
+            return
+
+        trades = msg["data"]
+
+        with self.lock:
+            for t in trades:
+                px = float(t["px"])
+                sz = float(t["sz"])
+                side = t["side"]  # buy or sell
+
+                if side == "buy":
+                    self.last_buy_vol += sz
+                else:
+                    self.last_sell_vol += sz
+
+            # Calculate imbalance
+            total = self.last_buy_vol + self.last_sell_vol
+            if total > 0:
+                self.trade_imbalance = (self.last_buy_vol - self.last_sell_vol) / total
+
+            # Reset every update to make it short-term impulse
+            self.last_buy_vol = 0
+            self.last_sell_vol = 0
 
     def get_snapshot(self):
         with self.lock:
-            ob = self.order_book
-            trades = list(self.trades)
-        return {"order_book": ob, "trades": trades}
-
-# global instance
-collector = DataCollector()
+            return {
+                "price": self.price,
+                "spread": self.spread,
+                "imbalance": self.trade_imbalance,
+                "ts": time.time()
+            }
 
 
 ===== feature_engine.py =====
@@ -401,58 +442,74 @@ class LiveExecutor:
 
 
 # main.py
+
 import time
-from data_collector import collector
-from feature_engine import feature_engine
+from data_collector import DataCollector
+from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
 from config import MODE, BUCKET_SECONDS, POSITION_PCT
 
+
 def run_bot(runtime_seconds=300):
-    print("Starting Quantum Bot LITE v1.0 (MODE=%s)" % MODE)
+    print(f"Starting Quantum Bot LITE v1.0 (MODE={MODE})")
+
+    # 1. INIT MODULES
+    collector = DataCollector()
     collector.start()
+
     strat = SimpleStrategy()
-    execer = LiveExecutor(dry_run=True)  # start in dry-run; set to False only after sandbox tests
+    executor = LiveExecutor(dry_run=(MODE != "LIVE"))  # If MODE=LIVE → real trading
+
+    fe = FeatureEngine()
 
     start = time.time()
-    last_feature_time = 0
+    last_bucket = 0
+
     try:
         while True:
             now = time.time()
-            snapshot = collector.get_snapshot()
-            if now - last_feature_time >= BUCKET_SECONDS:
-                features = feature_engine.update_from_snapshot(snapshot)
-                last_feature_time = now
 
+            # 2. Process data every BUCKET_SECONDS seconds
+            if now - last_bucket >= BUCKET_SECONDS:
+                snapshot = collector.get_snapshot()
+                features = fe.update_from_snapshot(snapshot)
+                last_bucket = now
+
+                # Diagnostics
+                print("-----", features["timestamp"], "price:", features["current_price"])
+                print("imb:", features["order_book_imbalance"],
+                      "delta:", features["cumulative_delta"],
+                      "spread:", features["spread_percent"])
+                
                 result = strat.analyze(features)
-
-                # Print basic diagnostics
-                print("----", features['timestamp'], "price:", features['current_price'])
-                print("imbalance:", features['order_book_imbalance'], "delta:", features['cumulative_delta'], "spread%:", features['spread_percent'])
                 print("Strategy:", result)
 
-                if result['action'] == "ENTER":
-                    # compute notional from fraction POSITION_PCT (e.g., 0.05 = 5% of equity)
-                    notional_pct = POSITION_PCT
-                    if notional_pct > 1:
-                        notional_pct = notional_pct / 100.0
-                    # use safe_enter
-                    resp = execer.safe_enter_from_equity_pct(result['side'], notional_pct)
-                    strat.record_entry(result['side'], result.get('price', features['current_price']))
+                # 3. EXECUTION
+                if result["action"] == "ENTER":
+                    notional_pct = POSITION_PCT / 100 if POSITION_PCT > 1 else POSITION_PCT
+                    executor.safe_enter_from_equity_pct(result["side"], notional_pct)
 
-                if result['action'] == "EXIT":
-                    resp = execer.exit_position_market()
+                    strat.record_entry(result["side"], features["current_price"])
+
+                elif result["action"] == "EXIT":
+                    executor.exit_position_market()
                     strat.record_exit()
 
-            if runtime_seconds and (now - start) > runtime_seconds:
-                print("Run time elapsed, stopping...")
+            # 4. Stop by timeout
+            if runtime_seconds and (now - start) >= runtime_seconds:
+                print("Runtime finished. Stopping bot...")
                 break
 
-            time.sleep(0.1)
+            time.sleep(0.05)
+
     except KeyboardInterrupt:
-        print("Interrupted by user")
+        print("Interrupted manually")
+
     finally:
         collector.stop()
+        print("Collector stopped. Clean exit.")
+
 
 if __name__ == '__main__':
     run_bot(runtime_seconds=600)
