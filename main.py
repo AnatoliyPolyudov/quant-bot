@@ -4,12 +4,13 @@ from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
-from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD  # ДОБАВЬ ИМПОРТЫ
+from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD
 
 
 def run_bot():
     print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
     print(f"📈 Symbol: BTC-USDT-SWAP")
+    print(f"⏰ Timeframe: 1-MINUTE ANALYSIS")
     print(f"💰 Equity: $100, Position: {POSITION_PCT*100}%")
     print(f"⚡ Strategy: imb>{IMBALANCE_THRESHOLD}, delta>{DELTA_THRESHOLD}")
 
@@ -29,7 +30,7 @@ def run_bot():
         while True:
             now = time.time()
 
-            # Обрабатываем данные каждую секунду
+            # Обрабатываем данные КАЖДУЮ МИНУТУ (было каждую секунду)
             if now - last_bucket >= BUCKET_SECONDS:
                 snapshot = collector.get_snapshot()
                 
@@ -41,11 +42,12 @@ def run_bot():
                 features = fe.update_from_snapshot(snapshot)
                 last_bucket = now
 
-                # Выводим статус
+                # Выводим статус С НОВЫМИ МЕТРИКАМИ
                 print("\n" + "="*60)
                 print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
-                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Delta: {features['cumulative_delta']:.1f}")
-                print(f"📏 Spread: {features['spread_percent']:.4f}%")
+                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} (avg: {features['avg_imbalance_5min']:.3f})")
+                print(f"📊 Delta: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/min)")
+                print(f"🎯 Trend: {features['imbalance_trend']} | Spread: {features['spread_percent']:.4f}%")
                 
                 # Анализ стратегии
                 result = strat.analyze(features)
