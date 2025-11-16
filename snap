@@ -15,15 +15,15 @@ MODE = "live"  # ТОЛЬКО live режим
 EXCHANGE = "OKX"
 SYMBOL = "BTC-USDT-SWAP"
 
-# Тайминги
-BUCKET_SECONDS = 1.0
-MIN_SIGNAL_INTERVAL = 30.0
-TRADE_HOLD_SECONDS = 60.0
+# Тайминги ДЛЯ 1-МИНУТНОГО АНАЛИЗА
+BUCKET_SECONDS = 60.0  # БЫЛО 1.0 → СЕЙЧАС 60.0 (1 минута)
+MIN_SIGNAL_INTERVAL = 180.0  # БЫЛО 30.0 → СЕЙЧАС 180.0 (3 мин между входами)
+TRADE_HOLD_SECONDS = 300.0  # БЫЛО 60.0 → СЕЙЧАС 300.0 (5 минут удержание)
 
-# Параметры стратегии
-IMBALANCE_THRESHOLD = 0.62
-DELTA_THRESHOLD = 3.0
-SPREAD_MAX_PCT = 0.05
+# Параметры стратегии ДЛЯ 1-МИНУТКИ
+IMBALANCE_THRESHOLD = 0.64  # БЫЛО 0.62 → Более строгий порог
+DELTA_THRESHOLD = 4.5  # БЫЛО 3.0 → Более сильный поток
+SPREAD_MAX_PCT = 0.03  # БЫЛО 0.05 → Более жесткий спред
 
 # Риск-менеджмент
 START_EQUITY = 100.0  # Твоя сумма для расчета позиции
@@ -169,7 +169,7 @@ class LiveDataCollector:
 ===== feature_engine.py =====
 
 
-# feature_engine.py - УПРОЩЕННАЯ ВЕРСИЯ
+# feature_engine.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
 from collections import deque
 import time
 from datetime import datetime
@@ -177,14 +177,39 @@ from datetime import datetime
 class FeatureEngine:
     def __init__(self):
         self.delta_deque = deque()
+        self.imbalance_history = []  # История имбаланса для 5-минутного усреднения
         self.trade_counts = {"buy": 0, "sell": 0}
         self.last_price = 60000.0
-        self.delta_window_sec = 30  # Просто фиксированное значение
+        self.delta_window_sec = 300  # 5 минут для дельты
+        self.imbalance_window = 5    # 5 последних значений для усреднения
 
     def _clean_old(self, now_ts):
         cutoff = now_ts - self.delta_window_sec
         while self.delta_deque and self.delta_deque[0][0] < cutoff:
             self.delta_deque.popleft()
+
+    def _calculate_imbalance(self, bids, asks):
+        """Расчет имбаланса из стакана"""
+        bid_vol = 0.0
+        ask_vol = 0.0
+        
+        for b in bids[:3]:  # Топ 3 уровня
+            try:
+                if len(b) >= 2:
+                    bid_vol += float(b[1])
+            except:
+                pass
+                
+        for a in asks[:3]:  # Топ 3 уровня
+            try:
+                if len(a) >= 2:
+                    ask_vol += float(a[1])
+            except:
+                pass
+                
+        if (bid_vol + ask_vol) > 0:
+            return bid_vol / (bid_vol + ask_vol)
+        return 0.5
 
     def update_from_snapshot(self, snapshot):
         now = time.time()
@@ -192,33 +217,20 @@ class FeatureEngine:
         trades = snapshot.get("trades") or []
 
         # Imbalance and spread
-        imbalance = 0.5
+        current_imbalance = 0.5
         spread_pct = 0.0
         
         if ob:
             bids = ob.get("bids", [])
             asks = ob.get("asks", [])
             
-            # Calculate imbalance from top 3 levels
-            bid_vol = 0.0
-            ask_vol = 0.0
+            # Calculate current imbalance
+            current_imbalance = self._calculate_imbalance(bids, asks)
             
-            for b in bids[:3]:
-                try:
-                    if len(b) >= 2:
-                        bid_vol += float(b[1])
-                except:
-                    pass
-                    
-            for a in asks[:3]:
-                try:
-                    if len(a) >= 2:
-                        ask_vol += float(a[1])
-                except:
-                    pass
-                    
-            if (bid_vol + ask_vol) > 0:
-                imbalance = bid_vol / (bid_vol + ask_vol)
+            # Добавляем в историю для усреднения
+            self.imbalance_history.append(current_imbalance)
+            if len(self.imbalance_history) > self.imbalance_window:
+                self.imbalance_history.pop(0)
             
             # Calculate spread
             try:
@@ -230,6 +242,12 @@ class FeatureEngine:
                         self.last_price = (best_ask + best_bid) / 2
             except:
                 pass
+
+        # Усредненный имбаланс за 5 минут
+        avg_imbalance = sum(self.imbalance_history) / len(self.imbalance_history) if self.imbalance_history else current_imbalance
+        
+        # Тренд имбаланса
+        imbalance_trend = "rising" if avg_imbalance < current_imbalance else "falling" if avg_imbalance > current_imbalance else "flat"
 
         # Update delta from trades
         for t in trades:
@@ -250,12 +268,18 @@ class FeatureEngine:
         # Clean old trades and calculate cumulative delta
         self._clean_old(now)
         cumulative_delta = sum(x[1] for x in self.delta_deque)
+        
+        # Дельта в минуту (нормализация)
+        delta_per_minute = cumulative_delta / 5.0 if cumulative_delta != 0 else 0.0
 
         features = {
             "timestamp": datetime.utcnow().isoformat(),
-            "order_book_imbalance": round(imbalance, 4),
-            "spread_percent": round(spread_pct, 6),
+            "order_book_imbalance": round(current_imbalance, 4),
+            "avg_imbalance_5min": round(avg_imbalance, 4),  # НОВОЕ: усредненный имбаланс
+            "imbalance_trend": imbalance_trend,  # НОВОЕ: тренд имбаланса
             "cumulative_delta": round(cumulative_delta, 6),
+            "delta_per_minute": round(delta_per_minute, 2),  # НОВОЕ: скорость дельты
+            "spread_percent": round(spread_pct, 6),
             "buy_trades": self.trade_counts["buy"],
             "sell_trades": self.trade_counts["sell"],
             "current_price": round(self.last_price, 2)
@@ -453,12 +477,13 @@ from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
-from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD  # ДОБАВЬ ИМПОРТЫ
+from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD
 
 
 def run_bot():
     print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
     print(f"📈 Symbol: BTC-USDT-SWAP")
+    print(f"⏰ Timeframe: 1-MINUTE ANALYSIS")
     print(f"💰 Equity: $100, Position: {POSITION_PCT*100}%")
     print(f"⚡ Strategy: imb>{IMBALANCE_THRESHOLD}, delta>{DELTA_THRESHOLD}")
 
@@ -478,7 +503,7 @@ def run_bot():
         while True:
             now = time.time()
 
-            # Обрабатываем данные каждую секунду
+            # Обрабатываем данные КАЖДУЮ МИНУТУ (было каждую секунду)
             if now - last_bucket >= BUCKET_SECONDS:
                 snapshot = collector.get_snapshot()
                 
@@ -490,11 +515,12 @@ def run_bot():
                 features = fe.update_from_snapshot(snapshot)
                 last_bucket = now
 
-                # Выводим статус
+                # Выводим статус С НОВЫМИ МЕТРИКАМИ
                 print("\n" + "="*60)
                 print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
-                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Delta: {features['cumulative_delta']:.1f}")
-                print(f"📏 Spread: {features['spread_percent']:.4f}%")
+                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} (avg: {features['avg_imbalance_5min']:.3f})")
+                print(f"📊 Delta: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/min)")
+                print(f"🎯 Trend: {features['imbalance_trend']} | Spread: {features['spread_percent']:.4f}%")
                 
                 # Анализ стратегии
                 result = strat.analyze(features)
@@ -530,7 +556,7 @@ if __name__ == '__main__':
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py
+# simple_strategy.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
 import time
 from config import IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS
 
@@ -544,33 +570,60 @@ class SimpleStrategy:
 
     def analyze(self, features):
         imb = features.get("order_book_imbalance", 0.5)
+        avg_imb = features.get("avg_imbalance_5min", 0.5)
+        imb_trend = features.get("imbalance_trend", "flat")
         delta = features.get("cumulative_delta", 0.0)
+        delta_rate = features.get("delta_per_minute", 0.0)
         spread = features.get("spread_percent", 999.0)
         price = features.get("current_price", 0.0)
 
         # Reject if spread large or malformed
         if spread <= 0 or spread > SPREAD_MAX_PCT:
-            return {"action":"HOLD", "reason":"spread_bad", "confidence":0}
+            return {"action": "HOLD", "reason": "spread_bad", "confidence": 0}
 
         # If open - check exit
         if self.open_position:
             # time exit
             if time.time() - self.open_position["entry_ts"] >= TRADE_HOLD_SECONDS:
-                return {"action":"EXIT", "reason":"time_exit", "side": self.open_position["side"], "price": price}
-            # reverse condition
-            if self.open_position["side"] == "LONG" and (imb < 0.5 or delta < -DELTA_THRESHOLD):
-                return {"action":"EXIT", "reason":"reverse", "side":"LONG", "price": price}
-            if self.open_position["side"] == "SHORT" and (imb > 0.5 or delta > DELTA_THRESHOLD):
-                return {"action":"EXIT", "reason":"reverse", "side":"SHORT", "price": price}
-            return {"action":"HOLD", "reason":"position_open", "confidence":0}
+                return {"action": "EXIT", "reason": "time_exit", "side": self.open_position["side"], "price": price}
+            
+            # reverse condition with new metrics
+            if self.open_position["side"] == "LONG" and (imb < 0.5 or delta < -DELTA_THRESHOLD or imb_trend == "falling"):
+                return {"action": "EXIT", "reason": "reverse", "side": "LONG", "price": price}
+            if self.open_position["side"] == "SHORT" and (imb > 0.5 or delta > DELTA_THRESHOLD or imb_trend == "rising"):
+                return {"action": "EXIT", "reason": "reverse", "side": "SHORT", "price": price}
+            return {"action": "HOLD", "reason": "position_open", "confidence": 0}
 
-        # No open - entry rules
-        if imb > IMBALANCE_THRESHOLD and delta > DELTA_THRESHOLD and self.can_trade_now():
-            return {"action":"ENTER", "side":"LONG", "price": price, "confidence":80, "reason":"imb_delta_long"}
-        if imb < (1.0 - IMBALANCE_THRESHOLD) and delta < -DELTA_THRESHOLD and self.can_trade_now():
-            return {"action":"ENTER", "side":"SHORT", "price": price, "confidence":80, "reason":"imb_delta_short"}
+        # No open - entry rules ДЛЯ 1-МИНУТКИ
+        # LONG: имбаланс > 0.64 И дельта > 4.5 И тренд растущий
+        if (imb > IMBALANCE_THRESHOLD and 
+            delta > DELTA_THRESHOLD and 
+            imb_trend == "rising" and 
+            self.can_trade_now()):
+            
+            return {
+                "action": "ENTER", 
+                "side": "LONG", 
+                "price": price, 
+                "confidence": 85, 
+                "reason": f"1min_imb_{imb}_delta_{delta}_trend_rising"
+            }
+        
+        # SHORT: имбаланс < 0.36 И дельта < -4.5 И тренд падающий  
+        if (imb < (1.0 - IMBALANCE_THRESHOLD) and 
+            delta < -DELTA_THRESHOLD and 
+            imb_trend == "falling" and 
+            self.can_trade_now()):
+            
+            return {
+                "action": "ENTER", 
+                "side": "SHORT", 
+                "price": price, 
+                "confidence": 85, 
+                "reason": f"1min_imb_{imb}_delta_{delta}_trend_falling"
+            }
 
-        return {"action":"HOLD", "reason":"no_signal", "confidence":0}
+        return {"action": "HOLD", "reason": "no_signal", "confidence": 0}
 
     def record_entry(self, side, price):
         self.open_position = {"side": side, "entry_ts": time.time(), "entry_price": price}
