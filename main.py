@@ -1,4 +1,4 @@
-# main.py - FIXED IMPORTS
+# main.py - FIXED VERSION (без avg_imbalance_5min)
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
@@ -30,7 +30,7 @@ def run_bot():
         while True:
             now = time.time()
 
-            # Обрабатываем данные КАЖДУЮ МИНУТУ (было каждую секунду)
+            # Обрабатываем данные КАЖДУЮ МИНУТУ
             if now - last_bucket >= BUCKET_SECONDS:
                 snapshot = collector.get_snapshot()
                 
@@ -42,12 +42,12 @@ def run_bot():
                 features = fe.update_from_snapshot(snapshot)
                 last_bucket = now
 
-                # Выводим статус С НОВЫМИ МЕТРИКАМИ
+                # Выводим статус С ОБНОВЛЕННЫМИ МЕТРИКАМИ
                 print("\n" + "="*60)
                 print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
-                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} (avg: {features['avg_imbalance_5min']:.3f})")
+                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Trend: {features['imbalance_trend']}")
                 print(f"📊 Delta: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/min)")
-                print(f"🎯 Trend: {features['imbalance_trend']} | Spread: {features['spread_percent']:.4f}%")
+                print(f"🎯 Spread: {features['spread_percent']:.4f}%")
                 
                 # Анализ стратегии
                 result = strat.analyze(features)
@@ -71,6 +71,8 @@ def run_bot():
         print("\n🛑 Bot stopped by user")
     except Exception as e:
         print(f"\n❌ Critical error: {e}")
+        import traceback
+        traceback.print_exc()  # Покажет полный трейсбэк ошибки
     finally:
         collector.stop()
         print("✅ Bot shutdown complete")
