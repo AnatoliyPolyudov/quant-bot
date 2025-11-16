@@ -1,4 +1,4 @@
-# telegram_notifier.py - УВЕДОМЛЕНИЯ О СДЕЛКАХ В ТЕЛЕГРАМ
+# telegram_notifier.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
 import requests
 import json
 import os
@@ -92,17 +92,18 @@ class TelegramNotifier:
             
         time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
         pnl_emoji = "🟢" if pnl_percent > 0 else "🔴" if pnl_percent < 0 else "⚪"
+        side_emoji = "📈" if side == "LONG" else "📉"
         
         message = f"""
 📤 <b>POSITION CLOSED</b>
 ⏰ {time_str}
 🕒 Hold: {hold_time_minutes:.1f}m
 
-{buy_emoji} {side}
+{side_emoji} {side}
 💰 Entry: ${entry_price:,.2f}
 💰 Exit: ${exit_price:,.2f}
 
-{buy_emoji} PnL: {pnl_percent:+.3f}%
+{pnl_emoji} PnL: {pnl_percent:+.3f}%
         """.strip()
 
         self._send_message(message)
