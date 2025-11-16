@@ -1,0 +1,13 @@
+ts,mode,action,side,price,size_contracts,notional_usdt,note,api_response
+2025-11-16T14:10:45.461243,DRY,ORDER,buy,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:10:48.071095,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T14:11:18.624416,DRY,ORDER,buy,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:11:19.232443,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T14:12:07.863275,DRY,ORDER,buy,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:12:15.490116,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T14:12:54.069023,DRY,ORDER,sell,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""sell"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:12:54.673280,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T14:13:53.334093,DRY,ORDER,sell,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""sell"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:13:56.947264,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T14:14:40.602326,DRY,ORDER,sell,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""sell"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T14:14:41.205191,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
