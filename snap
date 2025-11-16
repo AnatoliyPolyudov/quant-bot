@@ -3,7 +3,7 @@
 ===== config.py =====
 
 
-# config.py - ТОЛЬКО LIVE РЕЖИМ
+# config.py - ФИКСИРУЕМ ГЛАВНУЮ ПРОБЛЕМУ ВЫХОДОВ
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -15,19 +15,24 @@ MODE = "live"  # ТОЛЬКО live режим
 EXCHANGE = "OKX"
 SYMBOL = "BTC-USDT-SWAP"
 
-# Тайминги ДЛЯ 1-МИНУТНОГО АНАЛИЗА
-BUCKET_SECONDS = 60.0  # БЫЛО 1.0 → СЕЙЧАС 60.0 (1 минута)
-MIN_SIGNAL_INTERVAL = 180.0  # БЫЛО 30.0 → СЕЙЧАС 180.0 (3 мин между входами)
-TRADE_HOLD_SECONDS = 300.0  # БЫЛО 60.0 → СЕЙЧАС 300.0 (5 минут удержание)
+# Тайминги ДЛЯ УМНЫХ ВЫХОДОВ
+BUCKET_SECONDS = 60.0  # 1 минута анализа
+MIN_SIGNAL_INTERVAL = 300.0  # 5 мин между входами (было 180)
+TRADE_HOLD_SECONDS = 180.0  # МИНИМУМ 3 минуты удержания (было 300)
 
-# Параметры стратегии ДЛЯ 1-МИНУТКИ
-IMBALANCE_THRESHOLD = 0.64  # БЫЛО 0.62 → Более строгий порог
-DELTA_THRESHOLD = 4.5  # БЫЛО 3.0 → Более сильный поток
-SPREAD_MAX_PCT = 0.03  # БЫЛО 0.05 → Более жесткий спред
+# Параметры стратегии - СТРОГИЕ ПОРОГИ
+IMBALANCE_THRESHOLD = 0.70  # БЫЛО 0.64 → СЕЙЧАС 0.70
+DELTA_THRESHOLD = 8.0  # БЫЛО 4.5 → СЕЙЧАС 8.0
+SPREAD_MAX_PCT = 0.03
+
+# Параметры ВЫХОДА - НОВАЯ ЛОГИКА
+EXIT_IMBALANCE_THRESHOLD = 0.40  # Жесткий порог выхода
+EXIT_DELTA_PER_MINUTE = -5.0  # Скорость разворота для выхода
+MIN_HOLD_SECONDS = 120.0  # Минимум 2 минуты удержания
 
 # Риск-менеджмент
-START_EQUITY = 100.0  # Твоя сумма для расчета позиции
-POSITION_PCT = 0.05   # 5% от капитала на сделку
+START_EQUITY = 100.0
+POSITION_PCT = 0.05
 
 # Директории
 LOGS_DIR = ROOT / "logs"
@@ -169,7 +174,7 @@ class LiveDataCollector:
 ===== feature_engine.py =====
 
 
-# feature_engine.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
+# feature_engine.py - БЫСТРЫЙ ТРЕНД ДЛЯ 2 МИНУТ
 from collections import deque
 import time
 from datetime import datetime
@@ -177,11 +182,10 @@ from datetime import datetime
 class FeatureEngine:
     def __init__(self):
         self.delta_deque = deque()
-        self.imbalance_history = []  # История имбаланса для 5-минутного усреднения
+        self.imbalance_history = deque(maxlen=2)  # ТОЛЬКО 2 последних значения для быстрого тренда
         self.trade_counts = {"buy": 0, "sell": 0}
         self.last_price = 60000.0
         self.delta_window_sec = 300  # 5 минут для дельты
-        self.imbalance_window = 5    # 5 последних значений для усреднения
 
     def _clean_old(self, now_ts):
         cutoff = now_ts - self.delta_window_sec
@@ -193,14 +197,14 @@ class FeatureEngine:
         bid_vol = 0.0
         ask_vol = 0.0
         
-        for b in bids[:3]:  # Топ 3 уровня
+        for b in bids[:3]:
             try:
                 if len(b) >= 2:
                     bid_vol += float(b[1])
             except:
                 pass
                 
-        for a in asks[:3]:  # Топ 3 уровня
+        for a in asks[:3]:
             try:
                 if len(a) >= 2:
                     ask_vol += float(a[1])
@@ -227,10 +231,8 @@ class FeatureEngine:
             # Calculate current imbalance
             current_imbalance = self._calculate_imbalance(bids, asks)
             
-            # Добавляем в историю для усреднения
+            # Сохраняем для быстрого тренда (2 значения)
             self.imbalance_history.append(current_imbalance)
-            if len(self.imbalance_history) > self.imbalance_window:
-                self.imbalance_history.pop(0)
             
             # Calculate spread
             try:
@@ -243,11 +245,11 @@ class FeatureEngine:
             except:
                 pass
 
-        # Усредненный имбаланс за 5 минут
-        avg_imbalance = sum(self.imbalance_history) / len(self.imbalance_history) if self.imbalance_history else current_imbalance
-        
-        # Тренд имбаланса
-        imbalance_trend = "rising" if avg_imbalance < current_imbalance else "falling" if avg_imbalance > current_imbalance else "flat"
+        # БЫСТРЫЙ ТРЕНД - по 2 последним значениям
+        if len(self.imbalance_history) >= 2:
+            imb_trend = "rising" if current_imbalance > list(self.imbalance_history)[-2] else "falling"
+        else:
+            imb_trend = "flat"
 
         # Update delta from trades
         for t in trades:
@@ -275,10 +277,9 @@ class FeatureEngine:
         features = {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
-            "avg_imbalance_5min": round(avg_imbalance, 4),  # НОВОЕ: усредненный имбаланс
-            "imbalance_trend": imbalance_trend,  # НОВОЕ: тренд имбаланса
+            "imbalance_trend": imb_trend,  # БЫСТРЫЙ тренд
             "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(delta_per_minute, 2),  # НОВОЕ: скорость дельты
+            "delta_per_minute": round(delta_per_minute, 2),
             "spread_percent": round(spread_pct, 6),
             "buy_trades": self.trade_counts["buy"],
             "sell_trades": self.trade_counts["sell"],
@@ -471,7 +472,7 @@ class LiveExecutor:
 ===== main.py =====
 
 
-# main.py - FIXED IMPORTS
+# main.py - FIXED VERSION (без avg_imbalance_5min)
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
@@ -503,7 +504,7 @@ def run_bot():
         while True:
             now = time.time()
 
-            # Обрабатываем данные КАЖДУЮ МИНУТУ (было каждую секунду)
+            # Обрабатываем данные КАЖДУЮ МИНУТУ
             if now - last_bucket >= BUCKET_SECONDS:
                 snapshot = collector.get_snapshot()
                 
@@ -515,12 +516,12 @@ def run_bot():
                 features = fe.update_from_snapshot(snapshot)
                 last_bucket = now
 
-                # Выводим статус С НОВЫМИ МЕТРИКАМИ
+                # Выводим статус С ОБНОВЛЕННЫМИ МЕТРИКАМИ
                 print("\n" + "="*60)
                 print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
-                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} (avg: {features['avg_imbalance_5min']:.3f})")
+                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Trend: {features['imbalance_trend']}")
                 print(f"📊 Delta: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/min)")
-                print(f"🎯 Trend: {features['imbalance_trend']} | Spread: {features['spread_percent']:.4f}%")
+                print(f"🎯 Spread: {features['spread_percent']:.4f}%")
                 
                 # Анализ стратегии
                 result = strat.analyze(features)
@@ -544,6 +545,8 @@ def run_bot():
         print("\n🛑 Bot stopped by user")
     except Exception as e:
         print(f"\n❌ Critical error: {e}")
+        import traceback
+        traceback.print_exc()  # Покажет полный трейсбэк ошибки
     finally:
         collector.stop()
         print("✅ Bot shutdown complete")
@@ -556,9 +559,11 @@ if __name__ == '__main__':
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py - ОБНОВЛЕН ДЛЯ 1-МИНУТКИ
+# simple_strategy.py - УМНЫЕ ВЫХОДЫ БЕЗ ШУМА
 import time
-from config import IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS
+from config import (IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, 
+                   MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS,
+                   EXIT_IMBALANCE_THRESHOLD, EXIT_DELTA_PER_MINUTE, MIN_HOLD_SECONDS)
 
 class SimpleStrategy:
     def __init__(self):
@@ -570,7 +575,6 @@ class SimpleStrategy:
 
     def analyze(self, features):
         imb = features.get("order_book_imbalance", 0.5)
-        avg_imb = features.get("avg_imbalance_5min", 0.5)
         imb_trend = features.get("imbalance_trend", "flat")
         delta = features.get("cumulative_delta", 0.0)
         delta_rate = features.get("delta_per_minute", 0.0)
@@ -581,21 +585,34 @@ class SimpleStrategy:
         if spread <= 0 or spread > SPREAD_MAX_PCT:
             return {"action": "HOLD", "reason": "spread_bad", "confidence": 0}
 
-        # If open - check exit
+        # Если есть открытая позиция - УМНАЯ ЛОГИКА ВЫХОДА
         if self.open_position:
-            # time exit
-            if time.time() - self.open_position["entry_ts"] >= TRADE_HOLD_SECONDS:
+            current_time = time.time()
+            position_age = current_time - self.open_position["entry_ts"]
+            
+            # МИНИМАЛЬНОЕ ВРЕМЯ УДЕРЖАНИЯ - НЕ ВЫХОДИМ РАНЬШЕ 2 МИНУТ
+            if position_age < MIN_HOLD_SECONDS:
+                return {"action": "HOLD", "reason": "min_hold_time", "confidence": 0}
+            
+            # ВРЕМЕННОЙ ВЫХОД - после 5 минут
+            if position_age >= TRADE_HOLD_SECONDS:
                 return {"action": "EXIT", "reason": "time_exit", "side": self.open_position["side"], "price": price}
             
-            # reverse condition with new metrics
-            if self.open_position["side"] == "LONG" and (imb < 0.5 or delta < -DELTA_THRESHOLD or imb_trend == "falling"):
-                return {"action": "EXIT", "reason": "reverse", "side": "LONG", "price": price}
-            if self.open_position["side"] == "SHORT" and (imb > 0.5 or delta > DELTA_THRESHOLD or imb_trend == "rising"):
-                return {"action": "EXIT", "reason": "reverse", "side": "SHORT", "price": price}
+            # УМНЫЙ ВЫХОД ПО РАЗВОРОТУ - ТОЛЬКО ПРИ СИГНАЛАХ
+            if self.open_position["side"] == "LONG":
+                # Выход только при СИЛЬНОМ развороте
+                if imb < EXIT_IMBALANCE_THRESHOLD and delta_rate < EXIT_DELTA_PER_MINUTE:
+                    return {"action": "EXIT", "reason": "strong_reversal", "side": "LONG", "price": price}
+                    
+            elif self.open_position["side"] == "SHORT":
+                # Выход только при СИЛЬНОМ развороте  
+                if imb > (1.0 - EXIT_IMBALANCE_THRESHOLD) and delta_rate > -EXIT_DELTA_PER_MINUTE:
+                    return {"action": "EXIT", "reason": "strong_reversal", "side": "SHORT", "price": price}
+            
             return {"action": "HOLD", "reason": "position_open", "confidence": 0}
 
-        # No open - entry rules ДЛЯ 1-МИНУТКИ
-        # LONG: имбаланс > 0.64 И дельта > 4.5 И тренд растущий
+        # Нет открытой позиции - СТРОГИЕ УСЛОВИЯ ВХОДА
+        # LONG: имбаланс > 0.70 И дельта > 8.0 И тренд растущий
         if (imb > IMBALANCE_THRESHOLD and 
             delta > DELTA_THRESHOLD and 
             imb_trend == "rising" and 
@@ -605,11 +622,11 @@ class SimpleStrategy:
                 "action": "ENTER", 
                 "side": "LONG", 
                 "price": price, 
-                "confidence": 85, 
-                "reason": f"1min_imb_{imb}_delta_{delta}_trend_rising"
+                "confidence": 90, 
+                "reason": f"strong_long_imb_{imb}_delta_{delta}"
             }
         
-        # SHORT: имбаланс < 0.36 И дельта < -4.5 И тренд падающий  
+        # SHORT: имбаланс < 0.30 И дельта < -8.0 И тренд падающий  
         if (imb < (1.0 - IMBALANCE_THRESHOLD) and 
             delta < -DELTA_THRESHOLD and 
             imb_trend == "falling" and 
@@ -619,8 +636,8 @@ class SimpleStrategy:
                 "action": "ENTER", 
                 "side": "SHORT", 
                 "price": price, 
-                "confidence": 85, 
-                "reason": f"1min_imb_{imb}_delta_{delta}_trend_falling"
+                "confidence": 90, 
+                "reason": f"strong_short_imb_{imb}_delta_{delta}"
             }
 
         return {"action": "HOLD", "reason": "no_signal", "confidence": 0}
