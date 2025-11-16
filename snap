@@ -3,67 +3,47 @@
 ===== config.py =====
 
 
-# config.py - Quantum Bot LITE v1.0 (live-capable, demo by default)
+# config.py - ТОЛЬКО LIVE РЕЖИМ
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 
-# MODE: "demo" or "live" or "sandbox"
-MODE = "demo"            # demo = synthetic data; sandbox/live require keys and adjustments
+# Режим работы
+MODE = "live"  # ТОЛЬКО live режим
 
-# Exchange / symbol
+# Биржа и символ
 EXCHANGE = "OKX"
-SYMBOL = "BTC-USDT-SWAP"  # OKX perpetual contract id
+SYMBOL = "BTC-USDT-SWAP"
 
-# Timing
-BUCKET_SECONDS = 1.0         # feature aggregation bucket (seconds)
-MIN_SIGNAL_INTERVAL = 30.0   # minimum seconds between real trade signals (protect human)
-TRADE_HOLD_SECONDS = 60.0    # time-based exit (seconds)
+# Тайминги
+BUCKET_SECONDS = 1.0
+MIN_SIGNAL_INTERVAL = 30.0
+TRADE_HOLD_SECONDS = 60.0
 
-# Strategy thresholds (tuneable)
-IMBALANCE_THRESHOLD = 0.62   # bid/(bid+ask) threshold for long
-DELTA_THRESHOLD = 3.0        # rolling signed volume threshold
-SPREAD_MAX_PCT = 0.05        # max spread percent allowed (in percent)
+# Параметры стратегии
+IMBALANCE_THRESHOLD = 0.62
+DELTA_THRESHOLD = 3.0
+SPREAD_MAX_PCT = 0.05
 
-# Execution / risk
-RISK_PER_TRADE_PCT = 0.3     # percent of equity risked per trade (paper)
-START_EQUITY = 70.0          # starting equity default — set to your actual balance for sizing
-POSITION_PCT = 0.05          # fraction of equity per position (5% of equity)
+# Риск-менеджмент
+START_EQUITY = 100.0  # Твоя сумма для расчета позиции
+POSITION_PCT = 0.05   # 5% от капитала на сделку
 
-# Target / logging
-TARGET_HORIZON_SEC = 8
-TARGET_THRESHOLD_PCT = 0.03  # 0.03% move considered significant
-
-# Demo generator settings (used in demo MODE)
-DEMO_PRICE = 60000.0
-DEMO_VOL = 2.0               # price volatility scale
-
-# Windows (fallback)
-WINDOWS = {
-    "delta_window_sec": 30,
-    "volatility_window_sec": 120,
-    "depth_aggregation_sec": 3,
-    "oi_window_sec": 300
-}
-
-# Files & dirs
-DATA_DIR = ROOT / "data"
+# Директории
 LOGS_DIR = ROOT / "logs"
-MODELS_DIR = ROOT / "models"
-
-for d in (DATA_DIR, LOGS_DIR, MODELS_DIR):
-    d.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
 
 
 ===== data_collector.py =====
 
 
+# data_collector.py - ТОЛЬКО LIVE OKX
 import json
 import threading
 import websocket
 import time
 from datetime import datetime
-from config import SYMBOL, MODE
+from config import SYMBOL
 
 class LiveDataCollector:
     def __init__(self):
@@ -71,17 +51,15 @@ class LiveDataCollector:
         self.best_bid = None
         self.best_ask = None
         self.spread = None
-        self.delta = 0
-        self.last_buy_vol = 0
-        self.last_sell_vol = 0
-        self.trade_imbalance = 0
-
-        self.trades_buffer = []
+        self.bids = []
+        self.asks = []
+        self.trades = []
+        
         self.lock = threading.Lock()
-
         self._ws = None
+        self.connected = False
 
-        print("[Collector] Initializing live mode...")
+        print("[Collector] Starting OKX WebSocket connection...")
         self._start_ws()
 
     def _start_ws(self):
@@ -94,12 +72,15 @@ class LiveDataCollector:
             on_close=self._on_close
         )
 
-        t = threading.Thread(target=self._ws.run_forever, daemon=True)
-        t.start()
+        # Запускаем в отдельном потоке
+        self.ws_thread = threading.Thread(target=self._ws.run_forever, daemon=True)
+        self.ws_thread.start()
 
     def _on_open(self, ws):
-        print("[Collector] Connected to OKX WebSocket")
-
+        print("[Collector] ✅ Connected to OKX WebSocket")
+        self.connected = True
+        
+        # Подписываемся на стакан и трейды
         sub_msg = {
             "op": "subscribe",
             "args": [
@@ -108,77 +89,81 @@ class LiveDataCollector:
             ]
         }
         ws.send(json.dumps(sub_msg))
-        print("[Collector] Subscribed to books5 & trades")
+        print("[Collector] ✅ Subscribed to books5 & trades")
 
     def _on_error(self, ws, error):
-        print("[Collector] ERROR:", error)
+        print(f"[Collector] ❌ WebSocket error: {error}")
+        self.connected = False
 
-    def _on_close(self, ws, *args):
-        print("[Collector] WebSocket closed")
+    def _on_close(self, ws, close_status_code, close_msg):
+        print(f"[Collector] 🔌 WebSocket closed: {close_status_code} - {close_msg}")
+        self.connected = False
 
     def _on_message(self, ws, message):
-        msg = json.loads(message)
+        try:
+            msg = json.loads(message)
+            
+            if "event" in msg:
+                if msg["event"] == "subscribe":
+                    print(f"[Collector] ✅ Subscribed to: {msg.get('arg', {})}")
+                return
 
-        if "arg" not in msg:
-            return
+            if "arg" not in msg:
+                return
 
-        channel = msg["arg"]["channel"]
+            channel = msg["arg"]["channel"]
 
-        if channel == "books5":
-            self._handle_books(msg)
+            with self.lock:
+                if channel == "books5" and "data" in msg:
+                    self._handle_books(msg["data"][0])
+                elif channel == "trades" and "data" in msg:
+                    self._handle_trades(msg["data"])
+                    
+        except Exception as e:
+            print(f"[Collector] ❌ Message processing error: {e}")
 
-        elif channel == "trades":
-            self._handle_trades(msg)
+    def _handle_books(self, book_data):
+        """Обрабатываем стакан"""
+        try:
+            self.bids = book_data.get("bids", [])
+            self.asks = book_data.get("asks", [])
+            
+            if self.bids and self.asks:
+                self.best_bid = float(self.bids[0][0])
+                self.best_ask = float(self.asks[0][0])
+                self.price = (self.best_bid + self.best_ask) / 2
+                self.spread = self.best_ask - self.best_bid
+                
+        except Exception as e:
+            print(f"[Collector] ❌ Book processing error: {e}")
 
-    def _handle_books(self, msg):
-        if "data" not in msg:
-            return
-
-        data = msg["data"][0]
-
-        bid = float(data["bids"][0][0])
-        ask = float(data["asks"][0][0])
-
-        with self.lock:
-            self.best_bid = bid
-            self.best_ask = ask
-            self.price = (bid + ask) / 2
-            self.spread = ask - bid
-
-    def _handle_trades(self, msg):
-        if "data" not in msg:
-            return
-
-        trades = msg["data"]
-
-        with self.lock:
-            for t in trades:
-                px = float(t["px"])
-                sz = float(t["sz"])
-                side = t["side"]  # buy or sell
-
-                if side == "buy":
-                    self.last_buy_vol += sz
-                else:
-                    self.last_sell_vol += sz
-
-            # Calculate imbalance
-            total = self.last_buy_vol + self.last_sell_vol
-            if total > 0:
-                self.trade_imbalance = (self.last_buy_vol - self.last_sell_vol) / total
-
-            # Reset every update to make it short-term impulse
-            self.last_buy_vol = 0
-            self.last_sell_vol = 0
+    def _handle_trades(self, trades_data):
+        """Обрабатываем трейды"""
+        try:
+            self.trades = trades_data[-10:]  # Берем последние 10 трейдов
+        except Exception as e:
+            print(f"[Collector] ❌ Trade processing error: {e}")
 
     def get_snapshot(self):
+        """Возвращает текущий снапшот данных"""
         with self.lock:
             return {
+                "order_book": {
+                    "bids": self.bids,
+                    "asks": self.asks,
+                    "ts": datetime.utcnow().isoformat()
+                },
+                "trades": self.trades,
                 "price": self.price,
                 "spread": self.spread,
-                "imbalance": self.trade_imbalance,
-                "ts": time.time()
+                "connected": self.connected
             }
+
+    def stop(self):
+        """Останавливает соединение"""
+        if self._ws:
+            self._ws.close()
+        self.connected = False
 
 
 ===== feature_engine.py =====
@@ -441,78 +426,84 @@ class LiveExecutor:
 ===== main.py =====
 
 
-# main.py
-
+# main.py - FIXED FOR LIVE ONLY
 import time
-from data_collector import DataCollector
+from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
 from config import MODE, BUCKET_SECONDS, POSITION_PCT
 
 
-def run_bot(runtime_seconds=300):
-    print(f"Starting Quantum Bot LITE v1.0 (MODE={MODE})")
+def run_bot():
+    print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
+    print(f"📈 Symbol: BTC-USDT-SWAP")
+    print(f"💰 Equity: $100, Position: {POSITION_PCT*100}%")
+    print(f"⚡ Strategy: imb>{IMBALANCE_THRESHOLD}, delta>{DELTA_THRESHOLD}")
 
-    # 1. INIT MODULES
-    collector = DataCollector()
-    collector.start()
-
-    strat = SimpleStrategy()
-    executor = LiveExecutor(dry_run=(MODE != "LIVE"))  # If MODE=LIVE → real trading
-
+    # Инициализация модулей
+    collector = LiveDataCollector()
     fe = FeatureEngine()
+    strat = SimpleStrategy()
+    executor = LiveExecutor(dry_run=False)  # LIVE TRADING!
 
-    start = time.time()
     last_bucket = 0
+    startup_delay = 5  # Ждем подключения к WebSocket
+
+    print(f"⏳ Waiting {startup_delay}s for WebSocket connection...")
+    time.sleep(startup_delay)
 
     try:
         while True:
             now = time.time()
 
-            # 2. Process data every BUCKET_SECONDS seconds
+            # Обрабатываем данные каждую секунду
             if now - last_bucket >= BUCKET_SECONDS:
                 snapshot = collector.get_snapshot()
+                
+                if not snapshot.get("connected", False):
+                    print("❌ WebSocket not connected, retrying...")
+                    time.sleep(1)
+                    continue
+
                 features = fe.update_from_snapshot(snapshot)
                 last_bucket = now
 
-                # Diagnostics
-                print("-----", features["timestamp"], "price:", features["current_price"])
-                print("imb:", features["order_book_imbalance"],
-                      "delta:", features["cumulative_delta"],
-                      "spread:", features["spread_percent"])
+                # Выводим статус
+                print("\n" + "="*60)
+                print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
+                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Delta: {features['cumulative_delta']:.1f}")
+                print(f"📏 Spread: {features['spread_percent']:.4f}%")
                 
+                # Анализ стратегии
                 result = strat.analyze(features)
-                print("Strategy:", result)
+                print(f"🤖 Strategy: {result['action']} - {result.get('reason', '')}")
 
-                # 3. EXECUTION
+                # Исполнение
                 if result["action"] == "ENTER":
-                    notional_pct = POSITION_PCT / 100 if POSITION_PCT > 1 else POSITION_PCT
+                    print(f"💰 ENTER {result['side']} SIGNAL!")
+                    notional_pct = POSITION_PCT
                     executor.safe_enter_from_equity_pct(result["side"], notional_pct)
-
                     strat.record_entry(result["side"], features["current_price"])
 
                 elif result["action"] == "EXIT":
+                    print(f"💰 EXIT SIGNAL!")
                     executor.exit_position_market()
                     strat.record_exit()
 
-            # 4. Stop by timeout
-            if runtime_seconds and (now - start) >= runtime_seconds:
-                print("Runtime finished. Stopping bot...")
-                break
-
-            time.sleep(0.05)
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
-        print("Interrupted manually")
-
+        print("\n🛑 Bot stopped by user")
+    except Exception as e:
+        print(f"\n❌ Critical error: {e}")
     finally:
         collector.stop()
-        print("Collector stopped. Clean exit.")
+        print("✅ Bot shutdown complete")
 
 
 if __name__ == '__main__':
-    run_bot(runtime_seconds=600)
+    run_bot()
 
 
 ===== simple_strategy.py =====
