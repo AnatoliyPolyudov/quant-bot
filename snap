@@ -472,19 +472,24 @@ class LiveExecutor:
 ===== main.py =====
 
 
-# main.py - FIXED VERSION (без avg_imbalance_5min)
+# main.py - С TELEGRAM УВЕДОМЛЕНИЯМИ
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
+from telegram_notifier import telegram
 from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD
 
 
 def run_bot():
     print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
+    
+    # Отправляем статус в Telegram
+    telegram.send_bot_status("STARTING", "1.0")
+
     print(f"📈 Symbol: BTC-USDT-SWAP")
-    print(f"⏰ Timeframe: 1-MINUTE ANALYSIS")
+    print(f"⏰ Timeframe: 1-MINUTE ANALYSIS") 
     print(f"💰 Equity: $100, Position: {POSITION_PCT*100}%")
     print(f"⚡ Strategy: imb>{IMBALANCE_THRESHOLD}, delta>{DELTA_THRESHOLD}")
 
@@ -501,6 +506,9 @@ def run_bot():
     time.sleep(startup_delay)
 
     try:
+        # Отправляем статус что бот запущен
+        telegram.send_bot_status("RUNNING", "1.0")
+        
         while True:
             now = time.time()
 
@@ -531,24 +539,40 @@ def run_bot():
                 if result["action"] == "ENTER":
                     print(f"💰 ENTER {result['side']} SIGNAL!")
                     notional_pct = POSITION_PCT
-                    executor.safe_enter_from_equity_pct(result["side"], notional_pct)
-                    strat.record_entry(result["side"], features["current_price"])
+                    order_result = executor.safe_enter_from_equity_pct(result["side"], notional_pct)
+                    
+                    # Отправляем уведомление о исполнении
+                    if order_result:
+                        telegram.send_trade_executed(
+                            action="ENTER",
+                            side=result["side"],
+                            price=result["price"],
+                            size=result.get("size", 0),
+                            notional=result.get("notional", 0),
+                            order_id=order_result.get("resp", {}).get("data", [{}])[0].get("ordId") if order_result.get("resp") else "SIMULATED"
+                        )
+                    
+                    strat.record_entry(result["side"], result["price"], result.get("size"))
 
                 elif result["action"] == "EXIT":
                     print(f"💰 EXIT SIGNAL!")
-                    executor.exit_position_market()
+                    exit_result = executor.exit_position_market()
                     strat.record_exit()
 
             time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
+        telegram.send_bot_status("STOPPED", "1.0")
     except Exception as e:
-        print(f"\n❌ Critical error: {e}")
+        error_msg = f"Critical error: {e}"
+        print(f"\n❌ {error_msg}")
+        telegram.send_error(error_msg)
         import traceback
-        traceback.print_exc()  # Покажет полный трейсбэк ошибки
+        traceback.print_exc()
     finally:
         collector.stop()
+        telegram.send_bot_status("SHUTDOWN", "1.0")
         print("✅ Bot shutdown complete")
 
 
@@ -559,16 +583,20 @@ if __name__ == '__main__':
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py - УМНЫЕ ВЫХОДЫ БЕЗ ШУМА
+# simple_strategy.py - С TELEGRAM УВЕДОМЛЕНИЯМИ
 import time
 from config import (IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, 
                    MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS,
-                   EXIT_IMBALANCE_THRESHOLD, EXIT_DELTA_PER_MINUTE, MIN_HOLD_SECONDS)
+                   EXIT_IMBALANCE_THRESHOLD, EXIT_DELTA_PER_MINUTE, MIN_HOLD_SECONDS,
+                   POSITION_PCT, START_EQUITY)
+from telegram_notifier import telegram
 
 class SimpleStrategy:
     def __init__(self):
         self.last_trade_time = 0
-        self.open_position = None  # {"side","entry_ts","entry_price"}
+        self.open_position = None  # {"side","entry_ts","entry_price", "size"}
+        self.entry_price = 0.0
+        self.position_size = 0.0
 
     def can_trade_now(self):
         return (time.time() - self.last_trade_time) >= MIN_SIGNAL_INTERVAL
@@ -596,17 +624,45 @@ class SimpleStrategy:
             
             # ВРЕМЕННОЙ ВЫХОД - после 5 минут
             if position_age >= TRADE_HOLD_SECONDS:
+                # Расчет PnL для уведомления
+                pnl_pct = ((price - self.entry_price) / self.entry_price * 100) 
+                if self.open_position["side"] == "SHORT":
+                    pnl_pct = -pnl_pct
+                    
+                telegram.send_trade_exit(
+                    side=self.open_position["side"],
+                    entry_price=self.entry_price,
+                    exit_price=price,
+                    pnl_percent=pnl_pct,
+                    hold_time_minutes=position_age / 60
+                )
                 return {"action": "EXIT", "reason": "time_exit", "side": self.open_position["side"], "price": price}
             
             # УМНЫЙ ВЫХОД ПО РАЗВОРОТУ - ТОЛЬКО ПРИ СИГНАЛАХ
             if self.open_position["side"] == "LONG":
                 # Выход только при СИЛЬНОМ развороте
                 if imb < EXIT_IMBALANCE_THRESHOLD and delta_rate < EXIT_DELTA_PER_MINUTE:
+                    pnl_pct = ((price - self.entry_price) / self.entry_price * 100)
+                    telegram.send_trade_exit(
+                        side="LONG",
+                        entry_price=self.entry_price,
+                        exit_price=price,
+                        pnl_percent=pnl_pct,
+                        hold_time_minutes=position_age / 60
+                    )
                     return {"action": "EXIT", "reason": "strong_reversal", "side": "LONG", "price": price}
                     
             elif self.open_position["side"] == "SHORT":
                 # Выход только при СИЛЬНОМ развороте  
                 if imb > (1.0 - EXIT_IMBALANCE_THRESHOLD) and delta_rate > -EXIT_DELTA_PER_MINUTE:
+                    pnl_pct = ((self.entry_price - price) / self.entry_price * 100)
+                    telegram.send_trade_exit(
+                        side="SHORT", 
+                        entry_price=self.entry_price,
+                        exit_price=price,
+                        pnl_percent=pnl_pct,
+                        hold_time_minutes=position_age / 60
+                    )
                     return {"action": "EXIT", "reason": "strong_reversal", "side": "SHORT", "price": price}
             
             return {"action": "HOLD", "reason": "position_open", "confidence": 0}
@@ -618,10 +674,32 @@ class SimpleStrategy:
             imb_trend == "rising" and 
             self.can_trade_now()):
             
+            # Расчет размера позиции
+            notional = START_EQUITY * POSITION_PCT
+            size = notional / price if price > 0 else 0
+            
+            # Отправляем сигнал в Telegram
+            metrics = {
+                "imbalance": imb,
+                "delta": delta,
+                "trend": imb_trend,
+                "delta_per_minute": delta_rate
+            }
+            telegram.send_trade_signal(
+                action="ENTER", 
+                side="LONG",
+                price=price,
+                size=size,
+                reason=f"strong_long_imb_{imb}_delta_{delta}",
+                metrics=metrics
+            )
+            
             return {
                 "action": "ENTER", 
                 "side": "LONG", 
-                "price": price, 
+                "price": price,
+                "size": size,
+                "notional": notional,
                 "confidence": 90, 
                 "reason": f"strong_long_imb_{imb}_delta_{delta}"
             }
@@ -632,20 +710,208 @@ class SimpleStrategy:
             imb_trend == "falling" and 
             self.can_trade_now()):
             
+            # Расчет размера позиции
+            notional = START_EQUITY * POSITION_PCT
+            size = notional / price if price > 0 else 0
+            
+            # Отправляем сигнал в Telegram
+            metrics = {
+                "imbalance": imb,
+                "delta": delta, 
+                "trend": imb_trend,
+                "delta_per_minute": delta_rate
+            }
+            telegram.send_trade_signal(
+                action="ENTER",
+                side="SHORT", 
+                price=price,
+                size=size,
+                reason=f"strong_short_imb_{imb}_delta_{delta}",
+                metrics=metrics
+            )
+            
             return {
                 "action": "ENTER", 
                 "side": "SHORT", 
-                "price": price, 
+                "price": price,
+                "size": size, 
+                "notional": notional,
                 "confidence": 90, 
                 "reason": f"strong_short_imb_{imb}_delta_{delta}"
             }
 
         return {"action": "HOLD", "reason": "no_signal", "confidence": 0}
 
-    def record_entry(self, side, price):
-        self.open_position = {"side": side, "entry_ts": time.time(), "entry_price": price}
+    def record_entry(self, side, price, size=None):
+        if size is None:
+            notional = START_EQUITY * POSITION_PCT
+            size = notional / price if price > 0 else 0
+            
+        self.open_position = {
+            "side": side, 
+            "entry_ts": time.time(), 
+            "entry_price": price,
+            "size": size
+        }
+        self.entry_price = price
+        self.position_size = size
         self.last_trade_time = time.time()
 
     def record_exit(self):
         self.open_position = None
+        self.entry_price = 0.0
+        self.position_size = 0.0
         self.last_trade_time = time.time()
+
+
+===== telegram_notifier.py =====
+
+
+# telegram_notifier.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
+import requests
+import json
+import os
+from datetime import datetime
+
+# Настройки Telegram из переменных окружения
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8468371553:AAE5XfnFkgkeadWt2M44w8BsiTQ8-7dogFU")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "317217451")
+
+class TelegramNotifier:
+    def __init__(self):
+        self.token = TELEGRAM_BOT_TOKEN
+        self.chat_id = TELEGRAM_CHAT_ID
+        self.enabled = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+        
+        if self.enabled:
+            print("✅ Telegram notifications ENABLED")
+        else:
+            print("❌ Telegram notifications DISABLED - check tokens")
+
+    def _send_message(self, message, parse_mode="HTML"):
+        """Базовая отправка сообщения"""
+        if not self.enabled:
+            return False
+            
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            payload = {
+                'chat_id': self.chat_id,
+                'text': message,
+                'parse_mode': parse_mode
+            }
+            response = requests.post(url, data=payload, timeout=10)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Telegram error: {e}")
+            return False
+
+    def send_trade_signal(self, action, side, price, size, reason, metrics):
+        """Уведомление о торговом сигнале"""
+        if not self.enabled:
+            return
+            
+        time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        
+        message = f"""
+🎯 <b>TRADE SIGNAL</b>
+⏰ {time_str}
+⚡ <b>{action} {side}</b>
+
+💰 Price: ${price:,.2f}
+📊 Size: {size:.6f} BTC
+📈 Reason: {reason}
+
+<b>METRICS:</b>
+📊 Imbalance: {metrics.get('imbalance', 0):.3f}
+📈 Delta: {metrics.get('delta', 0):.1f}
+🎯 Trend: {metrics.get('trend', 'N/A')}
+🔁 Delta/min: {metrics.get('delta_per_minute', 0):.1f}
+        """.strip()
+
+        self._send_message(message)
+
+    def send_trade_executed(self, action, side, price, size, notional, order_id=None):
+        """Уведомление о исполненной сделке"""
+        if not self.enabled:
+            return
+            
+        time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        status = "🟢 LIVE" if order_id and "sim" not in str(order_id) else "🟡 DRY RUN"
+        
+        message = f"""
+✅ <b>TRADE EXECUTED</b>
+⏰ {time_str}
+{status}
+
+🔄 <b>{action} {side}</b>
+💰 Price: ${price:,.2f}
+📊 Size: {size:.6f} BTC
+💵 Notional: ${notional:.2f}
+
+{"📝 Order: " + str(order_id) if order_id else ""}
+        """.strip()
+
+        self._send_message(message)
+
+    def send_trade_exit(self, side, entry_price, exit_price, pnl_percent, hold_time_minutes):
+        """Уведомление о выходе из позиции"""
+        if not self.enabled:
+            return
+            
+        time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        pnl_emoji = "🟢" if pnl_percent > 0 else "🔴" if pnl_percent < 0 else "⚪"
+        side_emoji = "📈" if side == "LONG" else "📉"
+        
+        message = f"""
+📤 <b>POSITION CLOSED</b>
+⏰ {time_str}
+🕒 Hold: {hold_time_minutes:.1f}m
+
+{side_emoji} {side}
+💰 Entry: ${entry_price:,.2f}
+💰 Exit: ${exit_price:,.2f}
+
+{pnl_emoji} PnL: {pnl_percent:+.3f}%
+        """.strip()
+
+        self._send_message(message)
+
+    def send_error(self, error_message):
+        """Уведомление об ошибке"""
+        if not self.enabled:
+            return
+            
+        time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        
+        message = f"""
+🚨 <b>BOT ERROR</b>
+⏰ {time_str}
+
+❌ {error_message}
+        """.strip()
+
+        self._send_message(message)
+
+    def send_bot_status(self, status, version="1.0"):
+        """Уведомление о статусе бота"""
+        if not self.enabled:
+            return
+            
+        time_str = datetime.utcnow().strftime("%H:%M:%S UTC")
+        
+        message = f"""
+🤖 <b>QUANT BOT {version}</b>
+⏰ {time_str}
+
+📊 Status: <b>{status}</b>
+📍 Symbol: BTC-USDT-SWAP
+⏱️ Timeframe: 1-MINUTE
+🔧 Mode: LIVE TRADING
+        """.strip()
+
+        self._send_message(message)
+
+
+# Глобальный инстанс
+telegram = TelegramNotifier()

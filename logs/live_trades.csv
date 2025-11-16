@@ -40,3 +40,6 @@ ts,mode,action,side,price,size_contracts,notional_usdt,note,api_response
 2025-11-16T16:23:26.922159,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
 2025-11-16T16:30:27.793427,DRY,ORDER,buy,,0.000053,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000053"", ""tdMode"": ""cross""}}"
 2025-11-16T16:32:27.442960,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
+2025-11-16T17:49:45.110973,DRY,ORDER,buy,,0.000053,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000053"", ""tdMode"": ""cross""}}"
+2025-11-16T18:05:30.882235,DRY,ORDER,buy,,0.000052,,simulated_market_order,"{""sim"": true, ""body"": {""instId"": ""BTC-USDT-SWAP"", ""side"": ""buy"", ""ordType"": ""market"", ""sz"": ""0.000052"", ""tdMode"": ""cross""}}"
+2025-11-16T18:09:30.672279,DRY,EXIT,BOTH,,,,simulated_exit,"{""sim"": true, ""note"": ""simulated_exit""}"
