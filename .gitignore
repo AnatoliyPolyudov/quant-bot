@@ -5,3 +5,4 @@ __pycache__/
 *.pyd
 *.swp
 *.dist-info/
+.env
