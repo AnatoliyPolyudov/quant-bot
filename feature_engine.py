@@ -1,79 +1,148 @@
-# feature_engine.py
 from collections import deque
 import time
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FeatureEngine:
     def __init__(self):
-        self.delta_deque = deque()
-        self.imbalance_history = deque(maxlen=2)
+        self.trade_history = deque()  # (timestamp, side, volume)
+        self.imbalance_history = deque(maxlen=3)
         self.last_price = 60000.0
-        self.delta_window_sec = 300  # 5 минут для cumulative_delta
-        self.volume_window_sec = 60   # 1 минута для volume_per_minute
+        self.window_seconds = 300  # 5 минут для анализа
 
-    def _clean_old(self, now_ts, window_sec):
-        cutoff = now_ts - window_sec
-        while self.delta_deque and self.delta_deque[0][0] < cutoff:
-            self.delta_deque.popleft()
+    def _clean_old_trades(self, current_time):
+        """Очистка старых трейдов с проверкой временных меток"""
+        cutoff = current_time - self.window_seconds
+        initial_count = len(self.trade_history)
+        
+        while self.trade_history and self.trade_history[0][0] < cutoff:
+            self.trade_history.popleft()
+            
+        if initial_count > 0 and len(self.trade_history) == 0:
+            logger.debug("All trades cleared from history")
 
-    def _calculate_imbalance(self, bids, asks):
-        bid_vol = sum(float(b[1]) for b in bids[:3] if len(b) >= 2)
-        ask_vol = sum(float(a[1]) for a in asks[:3] if len(a) >= 2)
-        if (bid_vol + ask_vol) > 0:
-            return bid_vol / (bid_vol + ask_vol)
-        return 0.5
+    def _calculate_imbalance(self, bids, asks, levels=3):
+        """Расчет имбаланса с проверкой достаточности данных"""
+        try:
+            # Проверяем, что есть достаточно уровней в стакане
+            if len(bids) < levels or len(asks) < levels:
+                logger.warning(f"Insufficient order book levels: bids={len(bids)}, asks={len(asks)}")
+                levels = min(len(bids), len(asks))
+                if levels == 0:
+                    return 0.5
+            
+            bid_vol = sum(float(bid[1]) for bid in bids[:levels])
+            ask_vol = sum(float(ask[1]) for ask in asks[:levels])
+            total = bid_vol + ask_vol
+            
+            if total <= 0:
+                logger.warning("Zero total volume in order book")
+                return 0.5
+                
+            imbalance = bid_vol / total
+            return imbalance
+            
+        except (ValueError, IndexError, TypeError) as e:
+            logger.error(f"Error calculating imbalance: {e}")
+            return 0.5
+
+    def _calculate_trend(self, current_imbalance):
+        """Расчет тренда имбаланса с обработкой равенства"""
+        if len(self.imbalance_history) < 2:
+            return "flat"
+        
+        prev_imbalance = self.imbalance_history[-1]
+        
+        if current_imbalance > prev_imbalance:
+            return "rising"
+        elif current_imbalance < prev_imbalance:
+            return "falling"
+        else:
+            return "flat"
+
+    def _update_price(self, bids, asks):
+        """Обновление цены с обработкой ошибок"""
+        try:
+            if not bids or not asks:
+                logger.warning("Empty bids or asks in order book")
+                return
+                
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+            
+            if best_ask <= best_bid:
+                logger.warning(f"Invalid spread: bid={best_bid}, ask={best_ask}")
+                return
+                
+            self.last_price = (best_bid + best_ask) / 2
+            
+        except (ValueError, IndexError, TypeError) as e:
+            logger.error(f"Error updating price: {e}")
 
     def update_from_snapshot(self, snapshot):
-        now = time.time()
-        ob = snapshot.get("order_book") or {}
-        trades = snapshot.get("trades") or []
-
+        current_time = time.time()
+        ob = snapshot.get("order_book", {})
+        trades = snapshot.get("trades", [])
+        
+        # 1. Расчет имбаланса
         current_imbalance = 0.5
-
-        if ob:
-            bids = ob.get("bids", [])
-            asks = ob.get("asks", [])
-
+        bids = ob.get("bids", [])
+        asks = ob.get("asks", [])
+        
+        if bids and asks:
             current_imbalance = self._calculate_imbalance(bids, asks)
             self.imbalance_history.append(current_imbalance)
-
+        
+        # 2. Обновление истории трейдов
+        valid_trades_count = 0
+        for trade in trades:
             try:
-                if bids and asks:
-                    best_bid = float(bids[0][0])
-                    best_ask = float(asks[0][0])
-                    if best_ask > best_bid:
-                        self.last_price = (best_ask + best_bid) / 2
-            except:
-                pass
+                side = trade.get("side", "").lower()
+                volume_str = trade.get("sz", "0")
+                volume = float(volume_str) if volume_str else 0.0
+                
+                if side in ["buy", "sell"] and volume > 0:
+                    self.trade_history.append((current_time, side, volume))
+                    valid_trades_count += 1
+                    
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid trade data: {trade}, error: {e}")
+        
+        # 3. Очистка старых трейдов
+        self._clean_old_trades(current_time)
+        
+        # 4. Расчет метрик
+        # Кумулятивная дельта за 5 минут
+        buy_volume = sum(vol for ts, side, vol in self.trade_history if side == "buy")
+        sell_volume = sum(vol for ts, side, vol in self.trade_history if side == "sell")
+        cumulative_delta = buy_volume - sell_volume
+        
+        # Объем за последнюю минуту (абсолютный)
+        recent_trades = [t for t in self.trade_history if t[0] > current_time - 60]
+        volume_per_minute = sum(abs(vol) for ts, side, vol in recent_trades)
+        
+        # Тренд имбаланса
+        trend = self._calculate_trend(current_imbalance)
+            
+        # Обновление цены
+        if bids and asks:
+            self._update_price(bids, asks)
 
-        if len(self.imbalance_history) >= 2:
-            imb_trend = "rising" if current_imbalance > list(self.imbalance_history)[-2] else "falling"
-        else:
-            imb_trend = "flat"
+        # Логирование для отладки
+        if len(self.trade_history) > 1000:
+            logger.info(f"Trade history size: {len(self.trade_history)}")
 
-        # Добавляем новые трейды
-        for t in trades:
-            side = t.get("side", "buy")
-            sz = float(t.get("sz", 0)) if t.get("sz") else 0.0
-            signed = sz if side == "buy" else -sz
-            self.delta_deque.append((now, signed))
-
-        # Cumulative Delta (5 минут)
-        self._clean_old(now, self.delta_window_sec)
-        cumulative_delta = sum(x[1] for x in self.delta_deque)
-
-        # Volume per minute (последняя минута)
-        recent_trades = [x for x in self.delta_deque if x[0] > now - 60]
-        volume_per_minute = sum(abs(x[1]) for x in recent_trades)
-
-        features = {
+        return {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
-            "imbalance_trend": imb_trend,
-            "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(volume_per_minute, 2),  # Теперь это ОБЪЕМ, а не дельта!
-            "current_price": round(self.last_price, 2)
+            "imbalance_trend": trend,
+            "cumulative_delta": round(cumulative_delta, 2),
+            "delta_per_minute": round(volume_per_minute, 2),
+            "current_price": round(self.last_price, 2),
+            "trade_count": len(self.trade_history),
+            "valid_trades_processed": valid_trades_count
         }
-        return features
 
 feature_engine = FeatureEngine()
