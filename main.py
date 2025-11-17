@@ -1,4 +1,3 @@
-# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -26,12 +25,11 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # Минималистичная печать с новой строки
+            # ОБНОВЛЕННАЯ печать - только то что есть
             print(f"Price: {features['current_price']}")
             print(f"Imbalance: {features['order_book_imbalance']:.3f}")
-            print(f"Delta: {features['cumulative_delta']:.1f}")
-            print(f"Trend: {features['imbalance_trend']}")
-            print(f"Volume: {features['delta_per_minute']:.1f}")
+            print(f"Spoofing: {features['spoofing_flag']}")
+            print(f"Volume: {features['recent_volume']:.1f}")
             print("---")
 
             result = strat.analyze(features)
