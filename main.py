@@ -20,10 +20,19 @@ def run_bot():
         while True:
             snapshot = collector.get_snapshot()
             if not snapshot.get("connected", False):
+                print("❌ WebSocket not connected")
                 time.sleep(1)
                 continue
 
             features = feature_engine.update_from_snapshot(snapshot)
+            
+            # ОТЛАДОЧНАЯ ПЕЧАТЬ - что видит бот
+            print(f"💰 Price: {features['current_price']} | "
+                  f"📊 Imbalance: {features['order_book_imbalance']:.3f} | "
+                  f"🎯 Delta: {features['cumulative_delta']:.1f} | "
+                  f"📈 Trend: {features['imbalance_trend']} | "
+                  f"🔊 Volume: {features['delta_per_minute']:.1f}")
+
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -31,9 +40,9 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"Signal: {side} at price {price:.2f}, Reason: {result['reason']}")
+                print(f"🎯 SIGNAL: {side} at {price:.2f}")
             else:
-                print(f"HOLD: {result['reason']}")
+                print(f"⏸️ HOLD: {result['reason']}")
 
             time.sleep(BUCKET_SECONDS)
 
