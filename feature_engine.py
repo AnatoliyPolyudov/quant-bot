@@ -6,6 +6,8 @@ class FeatureEngine:
     def __init__(self):
         self.last_price = 60000.0
         self.imbalance_history = deque(maxlen=2)  # Для тренда
+        self.trade_history = deque()  # (timestamp, side, volume)
+        self.price_history = deque()  # (timestamp, price)
 
     def _calculate_imbalance(self, bids, asks, levels=3):
         """Расчет имбаланса"""
@@ -14,31 +16,53 @@ class FeatureEngine:
             return 0.5
             
         bid_vol = sum(float(bid[1]) for bid in bids[:levels])
-        ask_vol = sum(float(ask[1]) for ask in asks[:levels])
+        ask_vol = sum(float(ask[1]) for bid in asks[:levels])
         total = bid_vol + ask_vol
         
         return bid_vol / total if total > 0 else 0.5
 
+    def update_trades(self, trades):
+        """Обновление истории трейдов"""
+        ts = time.time()
+        for trade in trades:
+            side = trade.get("side", "buy")  # "buy" или "sell"
+            volume = float(trade.get("sz", 0))
+            self.trade_history.append((ts, side, volume))
+        # Добавляем цену в историю
+        self.price_history.append((ts, self.last_price))
+
+    def compute_delta_absorption(self, window=30):
+        """Считаем дельту и absorption за окно"""
+        now = time.time()
+        # чистим старые данные
+        while self.trade_history and self.trade_history[0][0] < now - window:
+            self.trade_history.popleft()
+        while self.price_history and self.price_history[0][0] < now - window:
+            self.price_history.popleft()
+
+        # дельта
+        delta = sum(v for t,s,v in self.trade_history if s=="buy") - sum(v for t,s,v in self.trade_history if s=="sell")
+        # изменение цены
+        price_change = self.last_price - self.price_history[0][1] if self.price_history else 0
+
+        absorption_up = price_change > 0 and delta <= 0
+        absorption_down = price_change < 0 and delta >= 0
+
+        return {
+            "delta": delta,
+            "price_change": price_change,
+            "absorption_up": absorption_up,
+            "absorption_down": absorption_down
+        }
+
     def update_from_snapshot(self, snapshot):
         current_time = time.time()
         ob = snapshot.get("order_book", {})
-        
-        # Расчет имбаланса
-        current_imbalance = 0.5
+        trades = snapshot.get("trades", [])
+
+        # обновление цены
         bids = ob.get("bids", [])
         asks = ob.get("asks", [])
-        
-        if bids and asks:
-            current_imbalance = self._calculate_imbalance(bids, asks)
-            self.imbalance_history.append(current_imbalance)
-        
-        # Тренд имбаланса
-        if len(self.imbalance_history) >= 2:
-            trend = "rising" if current_imbalance > self.imbalance_history[-2] else "falling"
-        else:
-            trend = "flat"
-
-        # Обновление цены
         if bids and asks:
             try:
                 best_bid = float(bids[0][0])
@@ -48,11 +72,28 @@ class FeatureEngine:
             except (ValueError, IndexError):
                 pass
 
+        # расчет имбаланса
+        current_imbalance = 0.5
+        if bids and asks:
+            current_imbalance = self._calculate_imbalance(bids, asks)
+            self.imbalance_history.append(current_imbalance)
+
+        # тренд имбаланса
+        if len(self.imbalance_history) >= 2:
+            trend = "rising" if current_imbalance > self.imbalance_history[-2] else "falling"
+        else:
+            trend = "flat"
+
+        # обновляем историю трейдов
+        self.update_trades(trades)
+        abs_features = self.compute_delta_absorption(window=30)
+
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
             "imbalance_trend": trend,
-            "current_price": round(self.last_price, 2)
+            "current_price": round(self.last_price, 2),
+            **abs_features
         }
 
 feature_engine = FeatureEngine()
