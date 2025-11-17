@@ -5,21 +5,20 @@
 
 # config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 20.0
+BUCKET_SECONDS = 60.0
 
 # Параметры стратегии
-IMBALANCE_THRESHOLD = 0.30
-DELTA_THRESHOLD = 12.0
+IMBALANCE_THRESHOLD = 0.35
+DELTA_THRESHOLD = 8.0
 
-# Новые фильтры
-MIN_VOLUME = 15.0
-CONFIRMATION_PERIODS = 2
-
+# Фильтры - УМЕНЬШАЕМ для тестирования
+MIN_VOLUME = 0.1           # было 10.0 - СЛИШКОМ МНОГО!
+CONFIRMATION_PERIODS = 1   # было 2 - для быстрого тестирования
 
 ===== data_collector.py =====
 
 
-# data_collector.py - ТОЛЬКО LIVE OKX
+# data_collector.py
 import json
 import threading
 import websocket
@@ -54,7 +53,6 @@ class LiveDataCollector:
             on_close=self._on_close
         )
 
-        # Запускаем в отдельном потоке
         self.ws_thread = threading.Thread(target=self._ws.run_forever, daemon=True)
         self.ws_thread.start()
 
@@ -62,7 +60,6 @@ class LiveDataCollector:
         print("[Collector] ✅ Connected to OKX WebSocket")
         self.connected = True
         
-        # Подписываемся на стакан и трейды
         sub_msg = {
             "op": "subscribe",
             "args": [
@@ -122,7 +119,9 @@ class LiveDataCollector:
     def _handle_trades(self, trades_data):
         """Обрабатываем трейды"""
         try:
-            self.trades = trades_data[-10:]  # Берем последние 10 трейдов
+            # ИСПРАВЛЕНИЕ: берем ВСЕ трейды
+            if trades_data:
+                self.trades = trades_data
         except Exception as e:
             print(f"[Collector] ❌ Trade processing error: {e}")
 
@@ -146,7 +145,6 @@ class LiveDataCollector:
         if self._ws:
             self._ws.close()
         self.connected = False
-
 
 ===== feature_engine.py =====
 
@@ -254,10 +252,19 @@ def run_bot():
         while True:
             snapshot = collector.get_snapshot()
             if not snapshot.get("connected", False):
+                print("❌ WebSocket not connected")
                 time.sleep(1)
                 continue
 
             features = feature_engine.update_from_snapshot(snapshot)
+            
+            # ОТЛАДОЧНАЯ ПЕЧАТЬ
+            print(f"💰 Price: {features['current_price']} | "
+                  f"📊 Imbalance: {features['order_book_imbalance']:.3f} | "
+                  f"🎯 Delta: {features['cumulative_delta']:.1f} | "
+                  f"📈 Trend: {features['imbalance_trend']} | "
+                  f"🔊 Volume: {features['delta_per_minute']:.1f}")
+
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -265,9 +272,9 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"Signal: {side} at price {price:.2f}, Reason: {result['reason']}")
+                print(f"🎯 SIGNAL: {side} at {price:.2f}")
             else:
-                print(f"HOLD: {result['reason']}")
+                print(f"⏸️ HOLD: {result['reason']}")
 
             time.sleep(BUCKET_SECONDS)
 
