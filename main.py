@@ -28,6 +28,8 @@ def run_bot():
             print(f"Price: {features['current_price']}")
             print(f"Imbalance: {features['order_book_imbalance']:.3f}")
             print(f"Trend: {features['imbalance_trend']}")
+            print(f"Delta: {features['delta']}")
+            print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
             print("---")
 
             result = strat.analyze(features)
