@@ -6,6 +6,6 @@ BUCKET_SECONDS = 60.0
 IMBALANCE_THRESHOLD = 0.35
 DELTA_THRESHOLD = 8.0
 
-# Фильтры
-MIN_VOLUME = 10.0
-CONFIRMATION_PERIODS = 2
+# Фильтры - УМЕНЬШАЕМ для тестирования
+MIN_VOLUME = 0.1           # было 10.0 - СЛИШКОМ МНОГО!
+CONFIRMATION_PERIODS = 1   # было 2 - для быстрого тестирования
