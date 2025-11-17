@@ -472,295 +472,256 @@ class LiveExecutor:
 ===== main.py =====
 
 
-# main.py - С TELEGRAM УВЕДОМЛЕНИЯМИ
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
 from simple_strategy import SimpleStrategy
 from live_executor import LiveExecutor
 from telegram_notifier import telegram
-from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELTA_THRESHOLD
+from config import BUCKET_SECONDS, POSITION_PCT
+
+
+def calc_pnl(entry_price, exit_price, size, side):
+    """Возвращает (pnl_usd, pnl_pct)."""
+    if side == "LONG":
+        pnl_usd = (exit_price - entry_price) * size
+    else:  # SHORT
+        pnl_usd = (entry_price - exit_price) * size
+    
+    pnl_pct = (exit_price / entry_price - 1) * (1 if side == "LONG" else -1)
+    return pnl_usd, pnl_pct
 
 
 def run_bot():
-    print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
+    print(f"🚀 Starting Quantum Bot LITE v1.1")
     
-    # Отправляем статус в Telegram
-    telegram.send_bot_status("STARTING", "1.0")
+    try: telegram.send_bot_status("STARTING", "1.1")
+    except: pass
 
-    print(f"📈 Symbol: BTC-USDT-SWAP")
-    print(f"⏰ Timeframe: 1-MINUTE ANALYSIS") 
-    print(f"💰 Equity: $100, Position: {POSITION_PCT*100}%")
-    print(f"⚡ Strategy: imb>{IMBALANCE_THRESHOLD}, delta>{DELTA_THRESHOLD}")
-
-    # Инициализация модулей
     collector = LiveDataCollector()
     fe = FeatureEngine()
     strat = SimpleStrategy()
-    executor = LiveExecutor(dry_run=False)  # LIVE TRADING!
+    executor = LiveExecutor(dry_run=True)  # DRY-RUN FOR SAFETY
 
     last_bucket = 0
-    startup_delay = 5  # Ждем подключения к WebSocket
-
-    print(f"⏳ Waiting {startup_delay}s for WebSocket connection...")
-    time.sleep(startup_delay)
+    time.sleep(5)
 
     try:
-        # Отправляем статус что бот запущен
-        telegram.send_bot_status("RUNNING", "1.0")
-        
-        while True:
-            now = time.time()
+        telegram.send_bot_status("RUNNING", "1.1")
+    except: pass
 
-            # Обрабатываем данные КАЖДУЮ МИНУТУ
-            if now - last_bucket >= BUCKET_SECONDS:
-                snapshot = collector.get_snapshot()
-                
-                if not snapshot.get("connected", False):
-                    print("❌ WebSocket not connected, retrying...")
-                    time.sleep(1)
-                    continue
+    while True:
+        now = time.time()
+        if now - last_bucket >= BUCKET_SECONDS:
+            snapshot = collector.get_snapshot()
+            if not snapshot.get("connected", False):
+                print("❌ WebSocket not ready")
+                time.sleep(1)
+                continue
 
-                features = fe.update_from_snapshot(snapshot)
-                last_bucket = now
+            features = fe.update_from_snapshot(snapshot)
+            last_bucket = now
 
-                # Выводим статус С ОБНОВЛЕННЫМИ МЕТРИКАМИ
-                print("\n" + "="*60)
-                print(f"📊 {features['timestamp'][11:19]} | Price: ${features['current_price']:.2f}")
-                print(f"📈 Imbalance: {features['order_book_imbalance']:.3f} | Trend: {features['imbalance_trend']}")
-                print(f"📊 Delta: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/min)")
-                print(f"🎯 Spread: {features['spread_percent']:.4f}%")
-                
-                # Анализ стратегии
-                result = strat.analyze(features)
-                print(f"🤖 Strategy: {result['action']} - {result.get('reason', '')}")
+            # Лог статуса
+            print("="*60)
+            print(f"📊 {features['timestamp'][11:19]} Price: ${features['current_price']:.2f}")
+            print(f"📈 I: {features['order_book_imbalance']:.3f}  Trend: {features['imbalance_trend']}")
+            print(f"Δ: {features['cumulative_delta']:.1f} ({features['delta_per_minute']:.1f}/m)")
+            print(f"Spread: {features['spread_percent']:.4f}%")
 
-                # Исполнение
-                if result["action"] == "ENTER":
-                    print(f"💰 ENTER {result['side']} SIGNAL!")
-                    notional_pct = POSITION_PCT
-                    order_result = executor.safe_enter_from_equity_pct(result["side"], notional_pct)
-                    
-                    # Отправляем уведомление о исполнении
-                    if order_result:
-                        telegram.send_trade_executed(
-                            action="ENTER",
-                            side=result["side"],
-                            price=result["price"],
-                            size=result.get("size", 0),
-                            notional=result.get("notional", 0),
-                            order_id=order_result.get("resp", {}).get("data", [{}])[0].get("ordId") if order_result.get("resp") else "SIMULATED"
+            # --- STRATEGY ---
+            result = strat.analyze(features)
+            print(f"🤖 Strategy: {result['action']} {result.get('reason', '')}")
+
+            # ========= ENTER =========
+            if result["action"] == "ENTER":
+                side = result["side"]
+                entry_price = result["price"]
+
+                order = executor.safe_enter_from_equity_pct(side, POSITION_PCT)
+
+                size = order.get("size") if order else 0
+                strat.record_entry(side, entry_price, size)
+
+                # Telegram
+                try:
+                    telegram.send_trade_executed(
+                        action="ENTER",
+                        side=side,
+                        price=entry_price,
+                        size=size,
+                        notional=order.get("notional", 0),
+                        order_id=(
+                            order.get("resp", {}).get("data", [{}])[0].get("ordId")
+                            if order and order.get("resp") else "SIMULATED"
                         )
-                    
-                    strat.record_entry(result["side"], result["price"], result.get("size"))
+                    )
+                except:
+                    pass
 
-                elif result["action"] == "EXIT":
-                    print(f"💰 EXIT SIGNAL!")
-                    exit_result = executor.exit_position_market()
-                    strat.record_exit()
+            # ========= EXIT =========
+            elif result["action"] == "EXIT" and strat.open_position:
 
-            time.sleep(0.1)
+                pos = strat.open_position
+                exit_price = result.get("price") or features["current_price"]
 
-    except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user")
-        telegram.send_bot_status("STOPPED", "1.0")
-    except Exception as e:
-        error_msg = f"Critical error: {e}"
-        print(f"\n❌ {error_msg}")
-        telegram.send_error(error_msg)
-        import traceback
-        traceback.print_exc()
-    finally:
-        collector.stop()
-        telegram.send_bot_status("SHUTDOWN", "1.0")
-        print("✅ Bot shutdown complete")
+                # Execute exit
+                exit_order = executor.exit_position_market()
 
+                # Calculate PnL
+                pnl_usd, pnl_pct = calc_pnl(
+                    entry_price=pos["entry_price"],
+                    exit_price=exit_price,
+                    size=pos["entry_size"] or 0,
+                    side=pos["side"]
+                )
 
-if __name__ == '__main__':
-    run_bot()
+                hold_minutes = (time.time() - pos["entry_ts"]) / 60
+
+                # FULL REPORT
+                report = (
+                    f"📉 EXIT {pos['side']}\n"
+                    f"Entry: ${pos['entry_price']:.2f}\n"
+                    f"Exit:  ${exit_price:.2f}\n"
+                    f"PnL: {pnl_pct*100:.3f}%  (${pnl_usd:.4f})\n"
+                    f"Hold: {hold_minutes:.1f}m\n"
+                    f"Reason: {result.get('reason', '-')}"
+                )
+
+                print("\n" + report + "\n")
+
+                # Telegram
+                try:
+                    telegram.send_message(report)
+                except:
+                    pass
+
+                strat.record_exit()
+
+        time.sleep(0.05)
 
 
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py - С TELEGRAM УВЕДОМЛЕНИЯМИ
 import time
-from config import (IMBALANCE_THRESHOLD, DELTA_THRESHOLD, SPREAD_MAX_PCT, 
-                   MIN_SIGNAL_INTERVAL, TRADE_HOLD_SECONDS,
-                   EXIT_IMBALANCE_THRESHOLD, EXIT_DELTA_PER_MINUTE, MIN_HOLD_SECONDS,
-                   POSITION_PCT, START_EQUITY)
-from telegram_notifier import telegram
 
 class SimpleStrategy:
-    def __init__(self):
-        self.last_trade_time = 0
-        self.open_position = None  # {"side","entry_ts","entry_price", "size"}
-        self.entry_price = 0.0
-        self.position_size = 0.0
+    """
+    Тестовая версия стратегии:
+    ❌ НЕТ min hold
+    ❌ НЕТ max hold
+    ✅ Вход только по сильному сигналу
+    ✅ Выход только по реверсу (усиленная логика)
+    """
 
-    def can_trade_now(self):
-        return (time.time() - self.last_trade_time) >= MIN_SIGNAL_INTERVAL
+    def __init__(self):
+        self.open_position = None  # {"side","entry_price","entry_ts","entry_size"}
+        self.last_trade_time = 0
+
+        # Порог входа
+        self.IMB_THR = 0.35
+        self.DELTA_THR = 8.0
+
+        # Порог выхода (усиленные)
+        self.EXIT_IMB_THR = 0.45
+        self.EXIT_DELTA_RATE_THR = 1.2
 
     def analyze(self, features):
+        """ Возвращает: {action, side?, price, reason} """
         imb = features.get("order_book_imbalance", 0.5)
-        imb_trend = features.get("imbalance_trend", "flat")
-        delta = features.get("cumulative_delta", 0.0)
+        delta_value = features.get("cumulative_delta", 0.0)
         delta_rate = features.get("delta_per_minute", 0.0)
-        spread = features.get("spread_percent", 999.0)
+        trend = features.get("imbalance_trend", "flat")
         price = features.get("current_price", 0.0)
 
-        # Reject if spread large or malformed
-        if spread <= 0 or spread > SPREAD_MAX_PCT:
-            return {"action": "HOLD", "reason": "spread_bad", "confidence": 0}
+        pos = self.open_position
 
-        # Если есть открытая позиция - УМНАЯ ЛОГИКА ВЫХОДА
-        if self.open_position:
-            current_time = time.time()
-            position_age = current_time - self.open_position["entry_ts"]
-            
-            # МИНИМАЛЬНОЕ ВРЕМЯ УДЕРЖАНИЯ - НЕ ВЫХОДИМ РАНЬШЕ 2 МИНУТ
-            if position_age < MIN_HOLD_SECONDS:
-                return {"action": "HOLD", "reason": "min_hold_time", "confidence": 0}
-            
-            # ВРЕМЕННОЙ ВЫХОД - после 5 минут
-            if position_age >= TRADE_HOLD_SECONDS:
-                # Расчет PnL для уведомления
-                pnl_pct = ((price - self.entry_price) / self.entry_price * 100) 
-                if self.open_position["side"] == "SHORT":
-                    pnl_pct = -pnl_pct
-                    
-                telegram.send_trade_exit(
-                    side=self.open_position["side"],
-                    entry_price=self.entry_price,
-                    exit_price=price,
-                    pnl_percent=pnl_pct,
-                    hold_time_minutes=position_age / 60
-                )
-                return {"action": "EXIT", "reason": "time_exit", "side": self.open_position["side"], "price": price}
-            
-            # УМНЫЙ ВЫХОД ПО РАЗВОРОТУ - ТОЛЬКО ПРИ СИГНАЛАХ
-            if self.open_position["side"] == "LONG":
-                # Выход только при СИЛЬНОМ развороте
-                if imb < EXIT_IMBALANCE_THRESHOLD and delta_rate < EXIT_DELTA_PER_MINUTE:
-                    pnl_pct = ((price - self.entry_price) / self.entry_price * 100)
-                    telegram.send_trade_exit(
-                        side="LONG",
-                        entry_price=self.entry_price,
-                        exit_price=price,
-                        pnl_percent=pnl_pct,
-                        hold_time_minutes=position_age / 60
-                    )
-                    return {"action": "EXIT", "reason": "strong_reversal", "side": "LONG", "price": price}
-                    
-            elif self.open_position["side"] == "SHORT":
-                # Выход только при СИЛЬНОМ развороте  
-                if imb > (1.0 - EXIT_IMBALANCE_THRESHOLD) and delta_rate > -EXIT_DELTA_PER_MINUTE:
-                    pnl_pct = ((self.entry_price - price) / self.entry_price * 100)
-                    telegram.send_trade_exit(
-                        side="SHORT", 
-                        entry_price=self.entry_price,
-                        exit_price=price,
-                        pnl_percent=pnl_pct,
-                        hold_time_minutes=position_age / 60
-                    )
-                    return {"action": "EXIT", "reason": "strong_reversal", "side": "SHORT", "price": price}
-            
-            return {"action": "HOLD", "reason": "position_open", "confidence": 0}
+        # ==========================
+        # ВХОД
+        # ==========================
+        if pos is None:
 
-        # Нет открытой позиции - СТРОГИЕ УСЛОВИЯ ВХОДА
-        # LONG: имбаланс > 0.70 И дельта > 8.0 И тренд растущий
-        if (imb > IMBALANCE_THRESHOLD and 
-            delta > DELTA_THRESHOLD and 
-            imb_trend == "rising" and 
-            self.can_trade_now()):
-            
-            # Расчет размера позиции
-            notional = START_EQUITY * POSITION_PCT
-            size = notional / price if price > 0 else 0
-            
-            # Отправляем сигнал в Telegram
-            metrics = {
-                "imbalance": imb,
-                "delta": delta,
-                "trend": imb_trend,
-                "delta_per_minute": delta_rate
-            }
-            telegram.send_trade_signal(
-                action="ENTER", 
-                side="LONG",
-                price=price,
-                size=size,
-                reason=f"strong_long_imb_{imb}_delta_{delta}",
-                metrics=metrics
-            )
-            
-            return {
-                "action": "ENTER", 
-                "side": "LONG", 
-                "price": price,
-                "size": size,
-                "notional": notional,
-                "confidence": 90, 
-                "reason": f"strong_long_imb_{imb}_delta_{delta}"
-            }
-        
-        # SHORT: имбаланс < 0.30 И дельта < -8.0 И тренд падающий  
-        if (imb < (1.0 - IMBALANCE_THRESHOLD) and 
-            delta < -DELTA_THRESHOLD and 
-            imb_trend == "falling" and 
-            self.can_trade_now()):
-            
-            # Расчет размера позиции
-            notional = START_EQUITY * POSITION_PCT
-            size = notional / price if price > 0 else 0
-            
-            # Отправляем сигнал в Telegram
-            metrics = {
-                "imbalance": imb,
-                "delta": delta, 
-                "trend": imb_trend,
-                "delta_per_minute": delta_rate
-            }
-            telegram.send_trade_signal(
-                action="ENTER",
-                side="SHORT", 
-                price=price,
-                size=size,
-                reason=f"strong_short_imb_{imb}_delta_{delta}",
-                metrics=metrics
-            )
-            
-            return {
-                "action": "ENTER", 
-                "side": "SHORT", 
-                "price": price,
-                "size": size, 
-                "notional": notional,
-                "confidence": 90, 
-                "reason": f"strong_short_imb_{imb}_delta_{delta}"
-            }
+            # --- SHORT ---
+            if (
+                imb < (1 - self.IMB_THR) and
+                delta_value < -self.DELTA_THR and
+                trend == "falling"
+            ):
+                return {
+                    "action": "ENTER",
+                    "side": "SHORT",
+                    "price": price,
+                    "reason": f"strong_short_imb_{imb:.4f}_delta_{delta_value:.2f}"
+                }
 
-        return {"action": "HOLD", "reason": "no_signal", "confidence": 0}
+            # --- LONG ---
+            if (
+                imb > self.IMB_THR and
+                delta_value > self.DELTA_THR and
+                trend == "rising"
+            ):
+                return {
+                    "action": "ENTER",
+                    "side": "LONG",
+                    "price": price,
+                    "reason": f"strong_long_imb_{imb:.4f}_delta_{delta_value:.2f}"
+                }
+
+            return {"action": "HOLD", "reason": "no_signal"}
+
+        # ==========================
+        # ВЫХОД
+        # ==========================
+
+        side = pos["side"]
+        entry_price = pos["entry_price"]
+
+        # --- EXIT SHORT ---
+        if side == "SHORT":
+            if (
+                imb > self.EXIT_IMB_THR and
+                delta_rate > self.EXIT_DELTA_RATE_THR and
+                price > entry_price  # цена реально пошла против
+            ):
+                return {
+                    "action": "EXIT",
+                    "price": price,
+                    "side": "SHORT",
+                    "reason": f"short_reversal price_up drate_{delta_rate:.2f}"
+                }
+
+        # --- EXIT LONG ---
+        if side == "LONG":
+            if (
+                imb < (1 - self.EXIT_IMB_THR) and
+                delta_rate < -self.EXIT_DELTA_RATE_THR and
+                price < entry_price  # цена идёт против
+            ):
+                return {
+                    "action": "EXIT",
+                    "price": price,
+                    "side": "LONG",
+                    "reason": f"long_reversal price_down drate_{delta_rate:.2f}"
+                }
+
+        return {"action": "HOLD", "reason": "position_holding"}
+
+    # ==========================
+    # Запись позиции
+    # ==========================
 
     def record_entry(self, side, price, size=None):
-        if size is None:
-            notional = START_EQUITY * POSITION_PCT
-            size = notional / price if price > 0 else 0
-            
         self.open_position = {
-            "side": side, 
-            "entry_ts": time.time(), 
+            "side": side,
             "entry_price": price,
-            "size": size
+            "entry_ts": time.time(),
+            "entry_size": size
         }
-        self.entry_price = price
-        self.position_size = size
         self.last_trade_time = time.time()
 
     def record_exit(self):
         self.open_position = None
-        self.entry_price = 0.0
-        self.position_size = 0.0
         self.last_trade_time = time.time()
 
 
