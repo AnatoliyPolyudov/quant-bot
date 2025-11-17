@@ -1,4 +1,4 @@
-# data_collector.py - ТОЛЬКО LIVE OKX
+# data_collector.py
 import json
 import threading
 import websocket
@@ -33,7 +33,6 @@ class LiveDataCollector:
             on_close=self._on_close
         )
 
-        # Запускаем в отдельном потоке
         self.ws_thread = threading.Thread(target=self._ws.run_forever, daemon=True)
         self.ws_thread.start()
 
@@ -41,7 +40,6 @@ class LiveDataCollector:
         print("[Collector] ✅ Connected to OKX WebSocket")
         self.connected = True
         
-        # Подписываемся на стакан и трейды
         sub_msg = {
             "op": "subscribe",
             "args": [
@@ -101,7 +99,9 @@ class LiveDataCollector:
     def _handle_trades(self, trades_data):
         """Обрабатываем трейды"""
         try:
-            self.trades = trades_data[-10:]  # Берем последние 10 трейдов
+            # ИСПРАВЛЕНИЕ: берем ВСЕ трейды
+            if trades_data:
+                self.trades = trades_data
         except Exception as e:
             print(f"[Collector] ❌ Trade processing error: {e}")
 
