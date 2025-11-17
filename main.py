@@ -124,9 +124,15 @@ def run_bot():
 
                     print("\n" + report + "\n")
 
-                    # Telegram
+                    # Telegram - ИСПРАВЛЕННАЯ ЧАСТЬ
                     try:
-                        telegram.send_message(report)
+                        telegram.send_trade_exit(
+                            side=pos["side"],
+                            entry_price=pos["entry_price"],
+                            exit_price=exit_price,
+                            pnl_percent=pnl_pct*100,
+                            hold_time_minutes=hold_minutes
+                        )
                     except Exception as e:
                         print(f"❌ Telegram error: {e}")
 
