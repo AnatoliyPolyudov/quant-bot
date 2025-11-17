@@ -1,60 +1,40 @@
-# simple_strategy.py
-import time
-from config import IMBALANCE_THRESHOLD, DELTA_THRESHOLD, MIN_VOLUME, CONFIRMATION_PERIODS
+from config import IMBALANCE_THRESHOLD
 
 class SimpleStrategy:
     def __init__(self):
         self.open_position = None
-        self.signal_confirmation = []  # Для подтверждения сигналов
-        self.last_signal = None
-    
+
     def analyze(self, features):
         imb = features.get("order_book_imbalance", 0.5)
-        delta_value = features.get("cumulative_delta", 0.0)
-        delta_per_minute = features.get("delta_per_minute", 0.0)
-        trend = features.get("imbalance_trend", "flat")
+        spoofing = features.get("spoofing_flag", "no_spoofing")
         price = features.get("current_price", 0.0)
 
-        # Фильтр по объему
-        if abs(delta_per_minute) < MIN_VOLUME:
-            return {"action": "HOLD", "reason": "low_volume"}
+        if self.open_position is not None:
+            return {"action": "HOLD", "reason": "position_open"}
 
-        signal = None
-        
-        # SHORT сигнал
-        if (imb < (1 - IMBALANCE_THRESHOLD) and 
-            delta_value < -DELTA_THRESHOLD and 
-            trend == "falling"):
-            signal = "SHORT"
-        
-        # LONG сигнал  
-        elif (imb > IMBALANCE_THRESHOLD and 
-              delta_value > DELTA_THRESHOLD and 
-              trend == "rising"):
-            signal = "LONG"
+        # Проверяем спуфинг
+        if spoofing == "possible_spoofing":
+            return {"action": "HOLD", "reason": "possible_spoofing"}
 
-        # Подтверждение сигнала
-        if signal:
-            self.signal_confirmation.append(signal)
-            # Оставляем только последние N сигналов
-            self.signal_confirmation = self.signal_confirmation[-CONFIRMATION_PERIODS:]
-            
-            # Если все последние сигналы одинаковые - подтвержденный сигнал
-            if (len(self.signal_confirmation) >= CONFIRMATION_PERIODS and 
-                all(s == signal for s in self.signal_confirmation)):
-                
-                if self.open_position is None:
-                    return {
-                        "action": "ENTER",
-                        "side": signal,
-                        "price": price,
-                        "reason": f"confirmed_{signal.lower()}_signal"
-                    }
-        else:
-            # Сбрасываем подтверждение если нет сигнала
-            self.signal_confirmation = []
+        # LONG сигнал
+        if imb > IMBALANCE_THRESHOLD:
+            return {
+                "action": "ENTER", 
+                "side": "LONG", 
+                "price": price,
+                "reason": "buy_pressure"
+            }
 
-        return {"action": "HOLD", "reason": "no_signal"}
+        # SHORT сигнал  
+        if imb < (1 - IMBALANCE_THRESHOLD):
+            return {
+                "action": "ENTER",
+                "side": "SHORT", 
+                "price": price,
+                "reason": "sell_pressure"
+            }
+
+        return {"action": "HOLD", "reason": "no_imbalance"}
 
     def record_entry(self, side, price):
         self.open_position = {
@@ -62,5 +42,3 @@ class SimpleStrategy:
             "entry_price": price,
             "entry_ts": time.time()
         }
-        # Сбрасываем подтверждение после входа
-        self.signal_confirmation = []
