@@ -28,3 +28,4 @@ __pycache__/
 *.key
 *.pem
 config.local.json
+logs/*
