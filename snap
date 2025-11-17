@@ -154,6 +154,8 @@ class FeatureEngine:
     def __init__(self):
         self.last_price = 60000.0
         self.imbalance_history = deque(maxlen=2)  # Для тренда
+        self.trade_history = deque()  # (timestamp, side, volume)
+        self.price_history = deque()  # (timestamp, price)
 
     def _calculate_imbalance(self, bids, asks, levels=3):
         """Расчет имбаланса"""
@@ -162,31 +164,53 @@ class FeatureEngine:
             return 0.5
             
         bid_vol = sum(float(bid[1]) for bid in bids[:levels])
-        ask_vol = sum(float(ask[1]) for ask in asks[:levels])
+        ask_vol = sum(float(ask[1]) for bid in asks[:levels])
         total = bid_vol + ask_vol
         
         return bid_vol / total if total > 0 else 0.5
 
+    def update_trades(self, trades):
+        """Обновление истории трейдов"""
+        ts = time.time()
+        for trade in trades:
+            side = trade.get("side", "buy")  # "buy" или "sell"
+            volume = float(trade.get("sz", 0))
+            self.trade_history.append((ts, side, volume))
+        # Добавляем цену в историю
+        self.price_history.append((ts, self.last_price))
+
+    def compute_delta_absorption(self, window=30):
+        """Считаем дельту и absorption за окно"""
+        now = time.time()
+        # чистим старые данные
+        while self.trade_history and self.trade_history[0][0] < now - window:
+            self.trade_history.popleft()
+        while self.price_history and self.price_history[0][0] < now - window:
+            self.price_history.popleft()
+
+        # дельта
+        delta = sum(v for t,s,v in self.trade_history if s=="buy") - sum(v for t,s,v in self.trade_history if s=="sell")
+        # изменение цены
+        price_change = self.last_price - self.price_history[0][1] if self.price_history else 0
+
+        absorption_up = price_change > 0 and delta <= 0
+        absorption_down = price_change < 0 and delta >= 0
+
+        return {
+            "delta": delta,
+            "price_change": price_change,
+            "absorption_up": absorption_up,
+            "absorption_down": absorption_down
+        }
+
     def update_from_snapshot(self, snapshot):
         current_time = time.time()
         ob = snapshot.get("order_book", {})
-        
-        # Расчет имбаланса
-        current_imbalance = 0.5
+        trades = snapshot.get("trades", [])
+
+        # обновление цены
         bids = ob.get("bids", [])
         asks = ob.get("asks", [])
-        
-        if bids and asks:
-            current_imbalance = self._calculate_imbalance(bids, asks)
-            self.imbalance_history.append(current_imbalance)
-        
-        # Тренд имбаланса
-        if len(self.imbalance_history) >= 2:
-            trend = "rising" if current_imbalance > self.imbalance_history[-2] else "falling"
-        else:
-            trend = "flat"
-
-        # Обновление цены
         if bids and asks:
             try:
                 best_bid = float(bids[0][0])
@@ -196,14 +220,32 @@ class FeatureEngine:
             except (ValueError, IndexError):
                 pass
 
+        # расчет имбаланса
+        current_imbalance = 0.5
+        if bids and asks:
+            current_imbalance = self._calculate_imbalance(bids, asks)
+            self.imbalance_history.append(current_imbalance)
+
+        # тренд имбаланса
+        if len(self.imbalance_history) >= 2:
+            trend = "rising" if current_imbalance > self.imbalance_history[-2] else "falling"
+        else:
+            trend = "flat"
+
+        # обновляем историю трейдов
+        self.update_trades(trades)
+        abs_features = self.compute_delta_absorption(window=30)
+
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
             "imbalance_trend": trend,
-            "current_price": round(self.last_price, 2)
+            "current_price": round(self.last_price, 2),
+            **abs_features
         }
 
 feature_engine = FeatureEngine()
+
 
 ===== main.py =====
 
@@ -238,6 +280,8 @@ def run_bot():
             print(f"Price: {features['current_price']}")
             print(f"Imbalance: {features['order_book_imbalance']:.3f}")
             print(f"Trend: {features['imbalance_trend']}")
+            print(f"Delta: {features['delta']}")
+            print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
             print("---")
 
             result = strat.analyze(features)
@@ -262,6 +306,7 @@ def run_bot():
 if __name__ == "__main__":
     run_bot()
 
+
 ===== simple_strategy.py =====
 
 
@@ -276,12 +321,15 @@ class SimpleStrategy:
         imb = features.get("order_book_imbalance", 0.5)
         trend = features.get("imbalance_trend", "flat")
         price = features.get("current_price", 0.0)
+        delta = features.get("delta", 0)
+        abs_up = features.get("absorption_up", False)
+        abs_down = features.get("absorption_down", False)
 
         if self.open_position is not None:
             return {"action": "HOLD", "reason": "position_open"}
 
         # LONG сигнал
-        if imb > IMBALANCE_THRESHOLD and trend == "rising":
+        if imb > IMBALANCE_THRESHOLD and trend == "rising" and not abs_up and delta > 5:
             return {
                 "action": "ENTER", 
                 "side": "LONG", 
@@ -290,7 +338,7 @@ class SimpleStrategy:
             }
 
         # SHORT сигнал  
-        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling":
+        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling" and not abs_down and delta < -5:
             return {
                 "action": "ENTER",
                 "side": "SHORT", 
@@ -306,6 +354,7 @@ class SimpleStrategy:
             "entry_price": price,
             "entry_ts": time.time()
         }
+
 
 ===== telegram_notifier.py =====
 
