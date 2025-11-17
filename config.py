@@ -1,7 +1,8 @@
-# config.py
 SYMBOL = "BTC-USDT-SWAP"
 BUCKET_SECONDS = 60.0
-IMBALANCE_THRESHOLD = 0.70
-DELTA_THRESHOLD = 3.0
-MIN_VOLUME = 2.0
-CONFIRMATION_PERIODS = 1
+
+# Единственный параметр стратегии
+IMBALANCE_THRESHOLD = 0.65  # 65% имбаланс
+
+# Параметры анти-спуфинга
+MIN_VOLUME_ANTI_SPOOFING = 8.0  # Минимальный объем для доверия имбалансу
