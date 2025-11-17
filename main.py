@@ -26,7 +26,7 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # ОТЛАДОЧНАЯ ПЕЧАТЬ - что видит бот
+            # ОТЛАДОЧНАЯ ПЕЧАТЬ
             print(f"💰 Price: {features['current_price']} | "
                   f"📊 Imbalance: {features['order_book_imbalance']:.3f} | "
                   f"🎯 Delta: {features['cumulative_delta']:.1f} | "
