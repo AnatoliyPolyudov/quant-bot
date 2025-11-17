@@ -9,12 +9,15 @@ class SimpleStrategy:
         imb = features.get("order_book_imbalance", 0.5)
         trend = features.get("imbalance_trend", "flat")
         price = features.get("current_price", 0.0)
+        delta = features.get("delta", 0)
+        abs_up = features.get("absorption_up", False)
+        abs_down = features.get("absorption_down", False)
 
         if self.open_position is not None:
             return {"action": "HOLD", "reason": "position_open"}
 
         # LONG сигнал
-        if imb > IMBALANCE_THRESHOLD and trend == "rising":
+        if imb > IMBALANCE_THRESHOLD and trend == "rising" and not abs_up and delta > 5:
             return {
                 "action": "ENTER", 
                 "side": "LONG", 
@@ -23,7 +26,7 @@ class SimpleStrategy:
             }
 
         # SHORT сигнал  
-        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling":
+        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling" and not abs_down and delta < -5:
             return {
                 "action": "ENTER",
                 "side": "SHORT", 
