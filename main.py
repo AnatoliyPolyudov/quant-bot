@@ -1,4 +1,4 @@
-# main.py - С TELEGRAM УВЕДОМЛЕНИЯМИ
+# main.py - С TELEGRAM УВЕДОМЛЕНИЯМИ (под SimpleStrategy)
 import time
 from data_collector import LiveDataCollector
 from feature_engine import FeatureEngine
@@ -11,8 +11,11 @@ from config import MODE, BUCKET_SECONDS, POSITION_PCT, IMBALANCE_THRESHOLD, DELT
 def run_bot():
     print(f"🚀 Starting Quantum Bot LITE v1.0 - LIVE MODE")
     
-    # Отправляем статус в Telegram
-    telegram.send_bot_status("STARTING", "1.0")
+    # Отправляем статус в Telegram (если telegram настроен)
+    try:
+        telegram.send_bot_status("STARTING", "1.0")
+    except Exception:
+        pass
 
     print(f"📈 Symbol: BTC-USDT-SWAP")
     print(f"⏰ Timeframe: 1-MINUTE ANALYSIS") 
@@ -23,7 +26,7 @@ def run_bot():
     collector = LiveDataCollector()
     fe = FeatureEngine()
     strat = SimpleStrategy()
-    executor = LiveExecutor(dry_run=False)  # LIVE TRADING!
+    executor = LiveExecutor(dry_run=True)  # ДЛЯ ТЕСТОВ ДЕРЖИМ DRY_RUN=True по умолчанию
 
     last_bucket = 0
     startup_delay = 5  # Ждем подключения к WebSocket
@@ -33,7 +36,10 @@ def run_bot():
 
     try:
         # Отправляем статус что бот запущен
-        telegram.send_bot_status("RUNNING", "1.0")
+        try:
+            telegram.send_bot_status("RUNNING", "1.0")
+        except Exception:
+            pass
         
         while True:
             now = time.time()
@@ -63,42 +69,77 @@ def run_bot():
 
                 # Исполнение
                 if result["action"] == "ENTER":
-                    print(f"💰 ENTER {result['side']} SIGNAL!")
+                    side = result.get("side")
+                    print(f"💰 ENTER {side} SIGNAL! reason={result.get('reason')}")
                     notional_pct = POSITION_PCT
-                    order_result = executor.safe_enter_from_equity_pct(result["side"], notional_pct)
-                    
-                    # Отправляем уведомление о исполнении
+                    order_result = executor.safe_enter_from_equity_pct(side, notional_pct)
+
+                    # order_result может быть None или dict
                     if order_result:
+                        # order_result обычно содержит price, size, resp, notional
+                        entry_price = order_result.get("price") or result.get("price") or features.get("current_price")
+                        entry_size = order_result.get("size") or result.get("size")
+                        notional = order_result.get("notional")
+                    else:
+                        entry_price = result.get("price") or features.get("current_price")
+                        entry_size = result.get("size")
+                        notional = None
+
+                    # Telegram уведомление (без падения при ошибке)
+                    try:
                         telegram.send_trade_executed(
                             action="ENTER",
-                            side=result["side"],
-                            price=result["price"],
-                            size=result.get("size", 0),
-                            notional=result.get("notional", 0),
-                            order_id=order_result.get("resp", {}).get("data", [{}])[0].get("ordId") if order_result.get("resp") else "SIMULATED"
+                            side=side,
+                            price=entry_price,
+                            size=entry_size or 0,
+                            notional=notional or 0,
+                            order_id=(order_result.get("resp", {}).get("data", [{}])[0].get("ordId") if order_result and order_result.get("resp") else "SIMULATED")
                         )
-                    
-                    strat.record_entry(result["side"], result["price"], result.get("size"))
+                    except Exception:
+                        pass
+
+                    strat.record_entry(side, entry_price, entry_size)
 
                 elif result["action"] == "EXIT":
-                    print(f"💰 EXIT SIGNAL!")
+                    print(f"💰 EXIT SIGNAL! reason={result.get('reason')}")
                     exit_result = executor.exit_position_market()
+                    try:
+                        telegram.send_trade_executed(
+                            action="EXIT",
+                            side=result.get("side") or (strat.open_position.get("side") if strat.open_position else "UNKNOWN"),
+                            price=features.get("current_price"),
+                            size=(strat.open_position.get("entry_size") if strat.open_position else 0),
+                            notional=0,
+                            order_id=(exit_result.get("resp", {}).get("data", [{}])[0].get("ordId") if exit_result and exit_result.get("resp") else "SIMULATED")
+                        )
+                    except Exception:
+                        pass
+
                     strat.record_exit()
 
             time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
-        telegram.send_bot_status("STOPPED", "1.0")
+        try:
+            telegram.send_bot_status("STOPPED", "1.0")
+        except Exception:
+            pass
     except Exception as e:
         error_msg = f"Critical error: {e}"
         print(f"\n❌ {error_msg}")
-        telegram.send_error(error_msg)
+        try:
+            telegram.send_error(error_msg)
+        except Exception:
+            pass
         import traceback
         traceback.print_exc()
     finally:
         collector.stop()
-        telegram.send_bot_status("SHUTDOWN", "1.0")
+        try:
+            telegram.send_bot_status("SHUTDOWN", "1.0")
+        except Exception:
+            pass
         print("✅ Bot shutdown complete")
 
 
