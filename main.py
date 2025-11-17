@@ -1,3 +1,4 @@
+# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -30,7 +31,9 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"Signal: {side} at price {price:.2f}")
+                print(f"Signal: {side} at price {price:.2f}, Reason: {result['reason']}")
+            else:
+                print(f"HOLD: {result['reason']}")
 
             time.sleep(BUCKET_SECONDS)
 
