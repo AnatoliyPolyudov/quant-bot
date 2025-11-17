@@ -1,3 +1,4 @@
+# feature_engine.py
 from collections import deque
 import time
 from datetime import datetime
@@ -7,7 +8,7 @@ class FeatureEngine:
         self.delta_deque = deque()
         self.imbalance_history = deque(maxlen=2)
         self.last_price = 60000.0
-        self.delta_window_sec = 300  # 5 минут для дельты
+        self.delta_window_sec = 60  # Уменьшаем до 1 минуты для delta_per_minute
 
     def _clean_old(self, now_ts):
         cutoff = now_ts - self.delta_window_sec
@@ -60,14 +61,16 @@ class FeatureEngine:
 
         self._clean_old(now)
         cumulative_delta = sum(x[1] for x in self.delta_deque)
-        delta_per_minute = cumulative_delta / 5.0 if cumulative_delta != 0 else 0.0
+        
+        # ПРАВИЛЬНЫЙ расчет объема в минуту
+        delta_per_minute = cumulative_delta  # cumulative_delta уже за последнюю минуту!
 
         features = {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
             "imbalance_trend": imb_trend,
             "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(delta_per_minute, 2),
+            "delta_per_minute": round(delta_per_minute, 2),  # Теперь правильное значение
             "spread_percent": round(spread_pct, 6),
             "current_price": round(self.last_price, 2)
         }
