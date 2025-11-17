@@ -3,17 +3,14 @@
 ===== config.py =====
 
 
-# config.py
 SYMBOL = "BTC-USDT-SWAP"
 BUCKET_SECONDS = 60.0
 
-# Параметры стратегии
-IMBALANCE_THRESHOLD = 0.35
-DELTA_THRESHOLD = 8.0
+# Единственный параметр стратегии
+IMBALANCE_THRESHOLD = 0.7
 
-# Фильтры - УМЕНЬШАЕМ для тестирования
-MIN_VOLUME = 0.1           # было 10.0 - СЛИШКОМ МНОГО!
-CONFIRMATION_PERIODS = 1   # было 2 - для быстрого тестирования
+# Параметры анти-спуфинга
+MIN_VOLUME_ANTI_SPOOFING = 0.5  # Минимальный объем для доверия имбалансу
 
 ===== data_collector.py =====
 
@@ -155,82 +152,62 @@ from datetime import datetime
 
 class FeatureEngine:
     def __init__(self):
-        self.delta_deque = deque()
-        self.imbalance_history = deque(maxlen=2)
         self.last_price = 60000.0
-        self.delta_window_sec = 300  # 5 минут для дельты
+        self.imbalance_history = deque(maxlen=2)  # Для тренда
 
-    def _clean_old(self, now_ts):
-        cutoff = now_ts - self.delta_window_sec
-        while self.delta_deque and self.delta_deque[0][0] < cutoff:
-            self.delta_deque.popleft()
-
-    def _calculate_imbalance(self, bids, asks):
-        bid_vol = sum(float(b[1]) for b in bids[:3] if len(b) >= 2)
-        ask_vol = sum(float(a[1]) for a in asks[:3] if len(a) >= 2)
-        if (bid_vol + ask_vol) > 0:
-            return bid_vol / (bid_vol + ask_vol)
-        return 0.5
+    def _calculate_imbalance(self, bids, asks, levels=3):
+        """Расчет имбаланса"""
+        levels = min(len(bids), len(asks), levels)
+        if levels == 0:
+            return 0.5
+            
+        bid_vol = sum(float(bid[1]) for bid in bids[:levels])
+        ask_vol = sum(float(ask[1]) for ask in asks[:levels])
+        total = bid_vol + ask_vol
+        
+        return bid_vol / total if total > 0 else 0.5
 
     def update_from_snapshot(self, snapshot):
-        now = time.time()
-        ob = snapshot.get("order_book") or {}
-        trades = snapshot.get("trades") or []
-
+        current_time = time.time()
+        ob = snapshot.get("order_book", {})
+        
+        # Расчет имбаланса
         current_imbalance = 0.5
-        spread_pct = 0.0
-
-        if ob:
-            bids = ob.get("bids", [])
-            asks = ob.get("asks", [])
-
+        bids = ob.get("bids", [])
+        asks = ob.get("asks", [])
+        
+        if bids and asks:
             current_imbalance = self._calculate_imbalance(bids, asks)
             self.imbalance_history.append(current_imbalance)
+        
+        # Тренд имбаланса
+        if len(self.imbalance_history) >= 2:
+            trend = "rising" if current_imbalance > self.imbalance_history[-2] else "falling"
+        else:
+            trend = "flat"
 
+        # Обновление цены
+        if bids and asks:
             try:
-                if bids and asks:
-                    best_bid = float(bids[0][0])
-                    best_ask = float(asks[0][0])
-                    if best_ask > best_bid:
-                        spread_pct = (best_ask - best_bid) / ((best_ask + best_bid) / 2) * 100.0
-                        self.last_price = (best_ask + best_bid) / 2
-            except:
+                best_bid = float(bids[0][0])
+                best_ask = float(asks[0][0])
+                if best_ask > best_bid:
+                    self.last_price = (best_bid + best_ask) / 2
+            except (ValueError, IndexError):
                 pass
 
-        if len(self.imbalance_history) >= 2:
-            imb_trend = "rising" if current_imbalance > list(self.imbalance_history)[-2] else "falling"
-        else:
-            imb_trend = "flat"
-
-        # Update delta from trades
-        for t in trades:
-            side = t.get("side", "buy")
-            sz = float(t.get("sz", 0)) if t.get("sz") else 0.0
-            signed = sz if side == "buy" else -sz
-            self.delta_deque.append((now, signed))
-
-        self._clean_old(now)
-        cumulative_delta = sum(x[1] for x in self.delta_deque)
-        delta_per_minute = cumulative_delta / 5.0 if cumulative_delta != 0 else 0.0
-
-        features = {
+        return {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
-            "imbalance_trend": imb_trend,
-            "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(delta_per_minute, 2),
-            "spread_percent": round(spread_pct, 6),
+            "imbalance_trend": trend,
             "current_price": round(self.last_price, 2)
         }
-        return features
 
 feature_engine = FeatureEngine()
-
 
 ===== main.py =====
 
 
-# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -252,18 +229,16 @@ def run_bot():
         while True:
             snapshot = collector.get_snapshot()
             if not snapshot.get("connected", False):
-                print("❌ WebSocket not connected")
+                print("WebSocket not connected")
                 time.sleep(1)
                 continue
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # ОТЛАДОЧНАЯ ПЕЧАТЬ
-            print(f"💰 Price: {features['current_price']} | "
-                  f"📊 Imbalance: {features['order_book_imbalance']:.3f} | "
-                  f"🎯 Delta: {features['cumulative_delta']:.1f} | "
-                  f"📈 Trend: {features['imbalance_trend']} | "
-                  f"🔊 Volume: {features['delta_per_minute']:.1f}")
+            print(f"Price: {features['current_price']}")
+            print(f"Imbalance: {features['order_book_imbalance']:.3f}")
+            print(f"Trend: {features['imbalance_trend']}")
+            print("---")
 
             result = strat.analyze(features)
 
@@ -272,9 +247,11 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"🎯 SIGNAL: {side} at {price:.2f}")
+                print(f"SIGNAL: {side} {price:.2f}")
+                print("===")
             else:
-                print(f"⏸️ HOLD: {result['reason']}")
+                print(f"HOLD: {result['reason']}")
+                print("---")
 
             time.sleep(BUCKET_SECONDS)
 
@@ -288,63 +265,40 @@ if __name__ == "__main__":
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py
 import time
-from config import IMBALANCE_THRESHOLD, DELTA_THRESHOLD, MIN_VOLUME, CONFIRMATION_PERIODS
+from config import IMBALANCE_THRESHOLD
 
 class SimpleStrategy:
     def __init__(self):
         self.open_position = None
-        self.signal_confirmation = []  # Для подтверждения сигналов
-        self.last_signal = None
-    
+
     def analyze(self, features):
         imb = features.get("order_book_imbalance", 0.5)
-        delta_value = features.get("cumulative_delta", 0.0)
-        delta_per_minute = features.get("delta_per_minute", 0.0)
         trend = features.get("imbalance_trend", "flat")
         price = features.get("current_price", 0.0)
 
-        # Фильтр по объему
-        if abs(delta_per_minute) < MIN_VOLUME:
-            return {"action": "HOLD", "reason": "low_volume"}
+        if self.open_position is not None:
+            return {"action": "HOLD", "reason": "position_open"}
 
-        signal = None
-        
-        # SHORT сигнал
-        if (imb < (1 - IMBALANCE_THRESHOLD) and 
-            delta_value < -DELTA_THRESHOLD and 
-            trend == "falling"):
-            signal = "SHORT"
-        
-        # LONG сигнал  
-        elif (imb > IMBALANCE_THRESHOLD and 
-              delta_value > DELTA_THRESHOLD and 
-              trend == "rising"):
-            signal = "LONG"
+        # LONG сигнал
+        if imb > IMBALANCE_THRESHOLD and trend == "rising":
+            return {
+                "action": "ENTER", 
+                "side": "LONG", 
+                "price": price,
+                "reason": "strong_buy_pressure"
+            }
 
-        # Подтверждение сигнала
-        if signal:
-            self.signal_confirmation.append(signal)
-            # Оставляем только последние N сигналов
-            self.signal_confirmation = self.signal_confirmation[-CONFIRMATION_PERIODS:]
-            
-            # Если все последние сигналы одинаковые - подтвержденный сигнал
-            if (len(self.signal_confirmation) >= CONFIRMATION_PERIODS and 
-                all(s == signal for s in self.signal_confirmation)):
-                
-                if self.open_position is None:
-                    return {
-                        "action": "ENTER",
-                        "side": signal,
-                        "price": price,
-                        "reason": f"confirmed_{signal.lower()}_signal"
-                    }
-        else:
-            # Сбрасываем подтверждение если нет сигнала
-            self.signal_confirmation = []
+        # SHORT сигнал  
+        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling":
+            return {
+                "action": "ENTER",
+                "side": "SHORT", 
+                "price": price,
+                "reason": "strong_sell_pressure"
+            }
 
-        return {"action": "HOLD", "reason": "no_signal"}
+        return {"action": "HOLD", "reason": f"no_signal imb:{imb:.3f} trend:{trend}"}
 
     def record_entry(self, side, price):
         self.open_position = {
@@ -352,8 +306,6 @@ class SimpleStrategy:
             "entry_price": price,
             "entry_ts": time.time()
         }
-        # Сбрасываем подтверждение после входа
-        self.signal_confirmation = []
 
 ===== telegram_notifier.py =====
 
