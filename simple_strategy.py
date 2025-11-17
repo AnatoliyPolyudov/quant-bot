@@ -2,24 +2,16 @@ import time
 
 class SimpleStrategy:
     """
-    Тестовая версия стратегии:
-    ❌ НЕТ min hold
-    ❌ НЕТ max hold
-    ✅ Вход только по сильному сигналу
-    ✅ Выход только по реверсу (усиленная логика)
+    Упрощенная стратегия: вход и выход по противоположным сигналам
     """
 
     def __init__(self):
         self.open_position = None  # {"side","entry_price","entry_ts","entry_size"}
         self.last_trade_time = 0
 
-        # Порог входа
+        # Единые пороги для входа и выхода
         self.IMB_THR = 0.35
         self.DELTA_THR = 8.0
-
-        # Порог выхода (усиленные)
-        self.EXIT_IMB_THR = 0.45
-        self.EXIT_DELTA_RATE_THR = 1.2
 
     def analyze(self, features):
         """ Возвращает: {action, side?, price, reason} """
@@ -35,7 +27,6 @@ class SimpleStrategy:
         # ВХОД
         # ==========================
         if pos is None:
-
             # --- SHORT ---
             if (
                 imb < (1 - self.IMB_THR) and
@@ -65,38 +56,36 @@ class SimpleStrategy:
             return {"action": "HOLD", "reason": "no_signal"}
 
         # ==========================
-        # ВЫХОД
+        # ВЫХОД по противоположному сигналу
         # ==========================
-
         side = pos["side"]
-        entry_price = pos["entry_price"]
 
-        # --- EXIT SHORT ---
+        # --- EXIT SHORT при LONG сигнале ---
         if side == "SHORT":
             if (
-                imb > self.EXIT_IMB_THR and
-                delta_rate > self.EXIT_DELTA_RATE_THR and
-                price > entry_price  # цена реально пошла против
+                imb > self.IMB_THR and           # Имбаланс для LONG
+                delta_value > self.DELTA_THR and # Дельта для LONG  
+                trend == "rising"                # Тренд растущий
             ):
                 return {
                     "action": "EXIT",
                     "price": price,
                     "side": "SHORT",
-                    "reason": f"short_reversal price_up drate_{delta_rate:.2f}"
+                    "reason": f"opposite_long_signal_imb_{imb:.4f}_delta_{delta_value:.2f}"
                 }
 
-        # --- EXIT LONG ---
+        # --- EXIT LONG при SHORT сигнале ---
         if side == "LONG":
             if (
-                imb < (1 - self.EXIT_IMB_THR) and
-                delta_rate < -self.EXIT_DELTA_RATE_THR and
-                price < entry_price  # цена идёт против
+                imb < (1 - self.IMB_THR) and     # Имбаланс для SHORT
+                delta_value < -self.DELTA_THR and # Дельта для SHORT
+                trend == "falling"               # Тренд падающий
             ):
                 return {
                     "action": "EXIT",
                     "price": price,
-                    "side": "LONG",
-                    "reason": f"long_reversal price_down drate_{delta_rate:.2f}"
+                    "side": "LONG", 
+                    "reason": f"opposite_short_signal_imb_{imb:.4f}_delta_{delta_value:.2f}"
                 }
 
         return {"action": "HOLD", "reason": "position_holding"}
