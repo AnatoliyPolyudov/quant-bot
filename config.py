@@ -1,7 +1,11 @@
-# config.py - минимальная версия для генерации сигналов входа
+# config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 60.0  # интервал анализа (секунды)
+BUCKET_SECONDS = 20.0
 
 # Параметры стратегии
-IMBALANCE_THRESHOLD = 0.35
-DELTA_THRESHOLD = 8.0
+IMBALANCE_THRESHOLD = 0.30
+DELTA_THRESHOLD = 12.0
+
+# Новые фильтры
+MIN_VOLUME = 15.0
+CONFIRMATION_PERIODS = 2
