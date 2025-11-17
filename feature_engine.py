@@ -8,10 +8,11 @@ class FeatureEngine:
         self.delta_deque = deque()
         self.imbalance_history = deque(maxlen=2)
         self.last_price = 60000.0
-        self.delta_window_sec = 60  # Уменьшаем до 1 минуты для delta_per_minute
+        self.delta_window_sec = 300  # 5 минут для cumulative_delta
+        self.volume_window_sec = 60   # 1 минута для volume_per_minute
 
-    def _clean_old(self, now_ts):
-        cutoff = now_ts - self.delta_window_sec
+    def _clean_old(self, now_ts, window_sec):
+        cutoff = now_ts - window_sec
         while self.delta_deque and self.delta_deque[0][0] < cutoff:
             self.delta_deque.popleft()
 
@@ -28,7 +29,6 @@ class FeatureEngine:
         trades = snapshot.get("trades") or []
 
         current_imbalance = 0.5
-        spread_pct = 0.0
 
         if ob:
             bids = ob.get("bids", [])
@@ -42,7 +42,6 @@ class FeatureEngine:
                     best_bid = float(bids[0][0])
                     best_ask = float(asks[0][0])
                     if best_ask > best_bid:
-                        spread_pct = (best_ask - best_bid) / ((best_ask + best_bid) / 2) * 100.0
                         self.last_price = (best_ask + best_bid) / 2
             except:
                 pass
@@ -52,26 +51,27 @@ class FeatureEngine:
         else:
             imb_trend = "flat"
 
-        # Update delta from trades
+        # Добавляем новые трейды
         for t in trades:
             side = t.get("side", "buy")
             sz = float(t.get("sz", 0)) if t.get("sz") else 0.0
             signed = sz if side == "buy" else -sz
             self.delta_deque.append((now, signed))
 
-        self._clean_old(now)
+        # Cumulative Delta (5 минут)
+        self._clean_old(now, self.delta_window_sec)
         cumulative_delta = sum(x[1] for x in self.delta_deque)
-        
-        # ПРАВИЛЬНЫЙ расчет объема в минуту
-        delta_per_minute = cumulative_delta  # cumulative_delta уже за последнюю минуту!
+
+        # Volume per minute (последняя минута)
+        recent_trades = [x for x in self.delta_deque if x[0] > now - 60]
+        volume_per_minute = sum(abs(x[1]) for x in recent_trades)
 
         features = {
             "timestamp": datetime.utcnow().isoformat(),
             "order_book_imbalance": round(current_imbalance, 4),
             "imbalance_trend": imb_trend,
             "cumulative_delta": round(cumulative_delta, 6),
-            "delta_per_minute": round(delta_per_minute, 2),  # Теперь правильное значение
-            "spread_percent": round(spread_pct, 6),
+            "delta_per_minute": round(volume_per_minute, 2),  # Теперь это ОБЪЕМ, а не дельта!
             "current_price": round(self.last_price, 2)
         }
         return features
