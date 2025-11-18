@@ -1,6 +1,6 @@
 # config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 20.0  # Проверка каждые 20 секунд для M3
+BUCKET_SECONDS = 30.0  # Баланс между скоростью и надежностью
 
 # Параметры стратегии
 IMBALANCE_THRESHOLD = 0.7
