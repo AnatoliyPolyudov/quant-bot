@@ -1,3 +1,4 @@
+# simple_strategy.py
 import time
 
 class SimpleStrategy:
@@ -10,25 +11,25 @@ class SimpleStrategy:
         abs_up = features.get("absorption_up", False)
         abs_down = features.get("absorption_down", False)
 
-        # LONG сигнал (разворот после SFP/поглощения снизу)
-        if abs_down or (delta < -1):
+        # LONG сигнал - более чувствительный для M3
+        if delta < -0.5 or abs_down:  # было -1.0
             return {
                 "action": "ENTER",
                 "side": "LONG",
                 "price": price,
-                "reason": f"absorption_down / delta {delta}"
+                "reason": f"absorption_down / delta {delta:.1f}"
             }
 
-        # SHORT сигнал (разворот после SFP/поглощения сверху)
-        if abs_up or (delta > 1):
+        # SHORT сигнал - более чувствительный для M3
+        if delta > 0.5 or abs_up:  # было 1.0
             return {
                 "action": "ENTER",
                 "side": "SHORT",
                 "price": price,
-                "reason": f"absorption_up / delta {delta}"
+                "reason": f"absorption_up / delta {delta:.1f}"
             }
 
-        return {"action": "HOLD", "reason": f"no signal delta {delta}"}
+        return {"action": "HOLD", "reason": f"no signal delta {delta:.1f}"}
 
     def record_entry(self, side, price):
         self.open_position = {
