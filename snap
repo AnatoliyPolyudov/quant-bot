@@ -3,14 +3,13 @@
 ===== config.py =====
 
 
+# config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 60.0
+BUCKET_SECONDS = 20.0  # Проверка каждые 20 секунд для M3
 
-# Единственный параметр стратегии
+# Параметры стратегии
 IMBALANCE_THRESHOLD = 0.7
-
-# Параметры анти-спуфинга
-MIN_VOLUME_ANTI_SPOOFING = 0.5  # Минимальный объем для доверия имбалансу
+MIN_VOLUME_ANTI_SPOOFING = 0.5
 
 ===== data_collector.py =====
 
@@ -159,13 +158,13 @@ class FeatureEngine:
         self.price_history = deque()
 
     def _calculate_imbalance(self, bids, asks, levels=3):
-        """Расчет имбаланса - ИСПРАВЛЕННАЯ ОШИБКА"""
+        """Расчет имбаланса"""
         levels = min(len(bids), len(asks), levels)
         if levels == 0:
             return 0.5
             
         bid_vol = sum(float(bid[1]) for bid in bids[:levels])
-        ask_vol = sum(float(ask[1]) for ask in asks[:levels])  # ИСПРАВЛЕНО: ask in asks
+        ask_vol = sum(float(ask[1]) for ask in asks[:levels])
         total = bid_vol + ask_vol
         
         return bid_vol / total if total > 0 else 0.5
@@ -179,7 +178,7 @@ class FeatureEngine:
             self.trade_history.append((ts, side, volume))
         self.price_history.append((ts, self.last_price))
 
-    def compute_delta_absorption(self, window=30):
+    def compute_delta_absorption(self, window=10):  # 10 секунд для M3
         """Считаем дельту и absorption"""
         now = time.time()
         while self.trade_history and self.trade_history[0][0] < now - window:
@@ -227,7 +226,7 @@ class FeatureEngine:
             trend = "flat"
 
         self.update_trades(trades)
-        abs_features = self.compute_delta_absorption(window=30)
+        abs_features = self.compute_delta_absorption(window=10)  # 10 секунд для M3
 
         return {
             "timestamp": datetime.utcnow().isoformat(),
@@ -239,10 +238,10 @@ class FeatureEngine:
 
 feature_engine = FeatureEngine()
 
-
 ===== main.py =====
 
 
+# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -270,13 +269,12 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # 🔹 Минималистичный вывод для теста дельты
+            # Минималистичный вывод для M3 теста
             print(f"Price: {features['current_price']}")
-            print(f"Delta: {features['delta']}")
-            print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
+            print(f"Delta: {features['delta']:.1f}")
+            print(f"Abs UP: {features['absorption_up']}, DOWN: {features['absorption_down']}")
             print("---")
 
-            # 🔹 Анализ сигнала по дельте
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -284,9 +282,9 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"SIGNAL: {side} {price:.2f} | Reason: {result['reason']}")
+                print(f"SIGNAL: {side} {price:.2f} | {result['reason']}")
             else:
-                print(f"HOLD | Reason: {result['reason']}")
+                print(f"HOLD | {result['reason']}")
             print("---")
 
             time.sleep(BUCKET_SECONDS)
@@ -298,10 +296,10 @@ def run_bot():
 if __name__ == "__main__":
     run_bot()
 
-
 ===== simple_strategy.py =====
 
 
+# simple_strategy.py
 import time
 
 class SimpleStrategy:
@@ -314,25 +312,25 @@ class SimpleStrategy:
         abs_up = features.get("absorption_up", False)
         abs_down = features.get("absorption_down", False)
 
-        # LONG сигнал (разворот после SFP/поглощения снизу)
-        if abs_down or (delta < -1):
+        # LONG сигнал - более чувствительный для M3
+        if delta < -0.5 or abs_down:  # было -1.0
             return {
                 "action": "ENTER",
                 "side": "LONG",
                 "price": price,
-                "reason": f"absorption_down / delta {delta}"
+                "reason": f"absorption_down / delta {delta:.1f}"
             }
 
-        # SHORT сигнал (разворот после SFP/поглощения сверху)
-        if abs_up or (delta > 1):
+        # SHORT сигнал - более чувствительный для M3
+        if delta > 0.5 or abs_up:  # было 1.0
             return {
                 "action": "ENTER",
                 "side": "SHORT",
                 "price": price,
-                "reason": f"absorption_up / delta {delta}"
+                "reason": f"absorption_up / delta {delta:.1f}"
             }
 
-        return {"action": "HOLD", "reason": f"no signal delta {delta}"}
+        return {"action": "HOLD", "reason": f"no signal delta {delta:.1f}"}
 
     def record_entry(self, side, price):
         self.open_position = {
@@ -340,7 +338,6 @@ class SimpleStrategy:
             "entry_price": price,
             "entry_ts": time.time()
         }
-
 
 ===== telegram_notifier.py =====
 
