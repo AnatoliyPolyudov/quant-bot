@@ -11,13 +11,13 @@ class FeatureEngine:
         self.price_history = deque()
 
     def _calculate_imbalance(self, bids, asks, levels=3):
-        """Расчет имбаланса - ИСПРАВЛЕННАЯ ОШИБКА"""
+        """Расчет имбаланса"""
         levels = min(len(bids), len(asks), levels)
         if levels == 0:
             return 0.5
             
         bid_vol = sum(float(bid[1]) for bid in bids[:levels])
-        ask_vol = sum(float(ask[1]) for ask in asks[:levels])  # ИСПРАВЛЕНО: ask in asks
+        ask_vol = sum(float(ask[1]) for ask in asks[:levels])
         total = bid_vol + ask_vol
         
         return bid_vol / total if total > 0 else 0.5
@@ -31,7 +31,7 @@ class FeatureEngine:
             self.trade_history.append((ts, side, volume))
         self.price_history.append((ts, self.last_price))
 
-    def compute_delta_absorption(self, window=30):
+    def compute_delta_absorption(self, window=10):  # 10 секунд для M3
         """Считаем дельту и absorption"""
         now = time.time()
         while self.trade_history and self.trade_history[0][0] < now - window:
@@ -79,7 +79,7 @@ class FeatureEngine:
             trend = "flat"
 
         self.update_trades(trades)
-        abs_features = self.compute_delta_absorption(window=30)
+        abs_features = self.compute_delta_absorption(window=10)  # 10 секунд для M3
 
         return {
             "timestamp": datetime.utcnow().isoformat(),
