@@ -270,13 +270,13 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
+            # 🔹 Минималистичный вывод для теста дельты
             print(f"Price: {features['current_price']}")
-            print(f"Imbalance: {features['order_book_imbalance']:.3f}")
-            print(f"Trend: {features['imbalance_trend']}")
             print(f"Delta: {features['delta']}")
             print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
             print("---")
 
+            # 🔹 Анализ сигнала по дельте
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -284,11 +284,10 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"SIGNAL: {side} {price:.2f}")
-                print("===")
+                print(f"SIGNAL: {side} {price:.2f} | Reason: {result['reason']}")
             else:
-                print(f"HOLD: {result['reason']}")
-                print("---")
+                print(f"HOLD | Reason: {result['reason']}")
+            print("---")
 
             time.sleep(BUCKET_SECONDS)
 
@@ -304,42 +303,36 @@ if __name__ == "__main__":
 
 
 import time
-from config import IMBALANCE_THRESHOLD
 
 class SimpleStrategy:
     def __init__(self):
         self.open_position = None
 
     def analyze(self, features):
-        imb = features.get("order_book_imbalance", 0.5)
-        trend = features.get("imbalance_trend", "flat")
         price = features.get("current_price", 0.0)
         delta = features.get("delta", 0)
         abs_up = features.get("absorption_up", False)
         abs_down = features.get("absorption_down", False)
 
-        if self.open_position is not None:
-            return {"action": "HOLD", "reason": "position_open"}
-
-        # LONG сигнал
-        if imb > IMBALANCE_THRESHOLD and trend == "rising" and not abs_up and delta > 5:
-            return {
-                "action": "ENTER", 
-                "side": "LONG", 
-                "price": price,
-                "reason": "strong_buy_pressure"
-            }
-
-        # SHORT сигнал  
-        if imb < (1 - IMBALANCE_THRESHOLD) and trend == "falling" and not abs_down and delta < -5:
+        # LONG сигнал (разворот после SFP/поглощения снизу)
+        if abs_down or (delta < -1):
             return {
                 "action": "ENTER",
-                "side": "SHORT", 
+                "side": "LONG",
                 "price": price,
-                "reason": "strong_sell_pressure"
+                "reason": f"absorption_down / delta {delta}"
             }
 
-        return {"action": "HOLD", "reason": f"no_signal imb:{imb:.3f} trend:{trend}"}
+        # SHORT сигнал (разворот после SFP/поглощения сверху)
+        if abs_up or (delta > 1):
+            return {
+                "action": "ENTER",
+                "side": "SHORT",
+                "price": price,
+                "reason": f"absorption_up / delta {delta}"
+            }
+
+        return {"action": "HOLD", "reason": f"no signal delta {delta}"}
 
     def record_entry(self, side, price):
         self.open_position = {
