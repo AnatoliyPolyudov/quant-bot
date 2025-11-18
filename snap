@@ -5,7 +5,7 @@
 
 # config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 20.0  # Проверка каждые 20 секунд для M3
+BUCKET_SECONDS = 30.0  # Баланс между скоростью и надежностью
 
 # Параметры стратегии
 IMBALANCE_THRESHOLD = 0.7
@@ -178,7 +178,7 @@ class FeatureEngine:
             self.trade_history.append((ts, side, volume))
         self.price_history.append((ts, self.last_price))
 
-    def compute_delta_absorption(self, window=10):  # 10 секунд для M3
+    def compute_delta_absorption(self, window=60):  # УВЕЛИЧЕНО до 60 секунд
         """Считаем дельту и absorption"""
         now = time.time()
         while self.trade_history and self.trade_history[0][0] < now - window:
@@ -226,7 +226,7 @@ class FeatureEngine:
             trend = "flat"
 
         self.update_trades(trades)
-        abs_features = self.compute_delta_absorption(window=10)  # 10 секунд для M3
+        abs_features = self.compute_delta_absorption(window=60)  # 60 секунд для надежности
 
         return {
             "timestamp": datetime.utcnow().isoformat(),
@@ -241,7 +241,6 @@ feature_engine = FeatureEngine()
 ===== main.py =====
 
 
-# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -251,7 +250,7 @@ from config import BUCKET_SECONDS
 
 def run_bot():
     print("Bot starting...")
-    telegram.send_bot_status("start")
+    telegram.send_bot_status("INFO BOT STARTED")
 
     collector = LiveDataCollector()
     strat = SimpleStrategy()
@@ -269,20 +268,21 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # Минималистичный вывод для M3 теста
+            # Вывод в консоль
             print(f"Price: {features['current_price']}")
             print(f"Delta: {features['delta']:.1f}")
             print(f"Abs UP: {features['absorption_up']}, DOWN: {features['absorption_down']}")
             print("---")
 
+            # Отправляем ВСЕГДА данные в Telegram
+            telegram_msg = f"Delta: {features['delta']:.1f} | UP: {features['absorption_up']} | DOWN: {features['absorption_down']}"
+            telegram.send_trade_signal("info", telegram_msg)  # Используем side="info" для данных
+
             result = strat.analyze(features)
 
-            if result["action"] == "ENTER":
-                side = result["side"]
-                price = result["price"]
-                strat.record_entry(side, price)
-                telegram.send_trade_signal(side, price)
-                print(f"SIGNAL: {side} {price:.2f} | {result['reason']}")
+            if result["action"] == "SIGNAL":
+                # Только выводим в консоль, в Telegram не отправляем сигналы
+                print(f"SIGNAL: {result['side']} {result['price']:.2f} | {result['reason']}")
             else:
                 print(f"HOLD | {result['reason']}")
             print("---")
@@ -291,7 +291,7 @@ def run_bot():
 
     except KeyboardInterrupt:
         print("Bot stopped")
-        telegram.send_bot_status("stop")
+        telegram.send_bot_status("INFO BOT STOPPED")
 
 if __name__ == "__main__":
     run_bot()
@@ -299,12 +299,12 @@ if __name__ == "__main__":
 ===== simple_strategy.py =====
 
 
-# simple_strategy.py
 import time
 
 class SimpleStrategy:
     def __init__(self):
-        self.open_position = None
+        # УБИРАЕМ открытую позицию - бот только информационный
+        pass
 
     def analyze(self, features):
         price = features.get("current_price", 0.0)
@@ -312,32 +312,25 @@ class SimpleStrategy:
         abs_up = features.get("absorption_up", False)
         abs_down = features.get("absorption_down", False)
 
-        # LONG сигнал - более чувствительный для M3
-        if delta < -0.5 or abs_down:  # было -1.0
+        # 🎯 LONG сигнал
+        if delta < -1.0 or abs_down:
             return {
-                "action": "ENTER",
-                "side": "LONG",
+                "action": "SIGNAL",  # Меняем ENTER на SIGNAL
+                "side": "LONG", 
                 "price": price,
-                "reason": f"absorption_down / delta {delta:.1f}"
+                "reason": f"LONG - absorption_down / delta {delta:.1f}"
             }
 
-        # SHORT сигнал - более чувствительный для M3
-        if delta > 0.5 or abs_up:  # было 1.0
+        # 🎯 SHORT сигнал  
+        if delta > 1.0 or abs_up:
             return {
-                "action": "ENTER",
+                "action": "SIGNAL",  # Меняем ENTER на SIGNAL
                 "side": "SHORT",
                 "price": price,
-                "reason": f"absorption_up / delta {delta:.1f}"
+                "reason": f"SHORT - absorption_up / delta {delta:.1f}"
             }
 
-        return {"action": "HOLD", "reason": f"no signal delta {delta:.1f}"}
-
-    def record_entry(self, side, price):
-        self.open_position = {
-            "side": side,
-            "entry_price": price,
-            "entry_ts": time.time()
-        }
+        return {"action": "HOLD", "reason": f"delta {delta:.1f}"}
 
 ===== telegram_notifier.py =====
 
@@ -347,7 +340,7 @@ import requests
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # ЗАГРУЖАЕМ ПЕРЕМЕННЫЕ ИЗ .env
+load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -356,9 +349,6 @@ class TelegramNotifier:
     def __init__(self):
         self.enabled = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
         print(f"[Telegram] Enabled: {self.enabled}")
-        if self.enabled:
-            print(f"[Telegram] Token: {TELEGRAM_BOT_TOKEN[:10]}...")
-            print(f"[Telegram] Chat ID: {TELEGRAM_CHAT_ID}")
 
     def _send_message(self, message):
         if not self.enabled:
@@ -366,7 +356,7 @@ class TelegramNotifier:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-            response = requests.post(url, json=payload, timeout=5)
+            requests.post(url, json=payload, timeout=5)
             print(f"[Telegram] Sent: {message}")
         except Exception as e:
             print(f"[Telegram] Error: {e}")
@@ -374,7 +364,8 @@ class TelegramNotifier:
     def send_bot_status(self, status):
         self._send_message(status)
 
-    def send_trade_signal(self, side, price):
-        self._send_message(f"{side.lower()} {price:.2f}")
+    def send_trade_signal(self, side, message):
+        # Всегда отправляем информационные сообщения
+        self._send_message(f"INFO: {message}")
 
 telegram = TelegramNotifier()
