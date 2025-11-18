@@ -1,8 +1,7 @@
+# config.py
 SYMBOL = "BTC-USDT-SWAP"
-BUCKET_SECONDS = 60.0
+BUCKET_SECONDS = 20.0  # Проверка каждые 20 секунд для M3
 
-# Единственный параметр стратегии
+# Параметры стратегии
 IMBALANCE_THRESHOLD = 0.7
-
-# Параметры анти-спуфинга
-MIN_VOLUME_ANTI_SPOOFING = 0.5  # Минимальный объем для доверия имбалансу
+MIN_VOLUME_ANTI_SPOOFING = 0.5
