@@ -1,3 +1,4 @@
+# main.py
 import time
 from data_collector import LiveDataCollector
 from feature_engine import feature_engine
@@ -25,13 +26,12 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
-            # 🔹 Минималистичный вывод для теста дельты
+            # Минималистичный вывод для M3 теста
             print(f"Price: {features['current_price']}")
-            print(f"Delta: {features['delta']}")
-            print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
+            print(f"Delta: {features['delta']:.1f}")
+            print(f"Abs UP: {features['absorption_up']}, DOWN: {features['absorption_down']}")
             print("---")
 
-            # 🔹 Анализ сигнала по дельте
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -39,9 +39,9 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"SIGNAL: {side} {price:.2f} | Reason: {result['reason']}")
+                print(f"SIGNAL: {side} {price:.2f} | {result['reason']}")
             else:
-                print(f"HOLD | Reason: {result['reason']}")
+                print(f"HOLD | {result['reason']}")
             print("---")
 
             time.sleep(BUCKET_SECONDS)
