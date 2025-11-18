@@ -31,7 +31,7 @@ class FeatureEngine:
             self.trade_history.append((ts, side, volume))
         self.price_history.append((ts, self.last_price))
 
-    def compute_delta_absorption(self, window=10):  # 10 секунд для M3
+    def compute_delta_absorption(self, window=60):  # УВЕЛИЧЕНО до 60 секунд
         """Считаем дельту и absorption"""
         now = time.time()
         while self.trade_history and self.trade_history[0][0] < now - window:
@@ -79,7 +79,7 @@ class FeatureEngine:
             trend = "flat"
 
         self.update_trades(trades)
-        abs_features = self.compute_delta_absorption(window=10)  # 10 секунд для M3
+        abs_features = self.compute_delta_absorption(window=60)  # 60 секунд для надежности
 
         return {
             "timestamp": datetime.utcnow().isoformat(),
