@@ -25,13 +25,13 @@ def run_bot():
 
             features = feature_engine.update_from_snapshot(snapshot)
             
+            # 🔹 Минималистичный вывод для теста дельты
             print(f"Price: {features['current_price']}")
-            print(f"Imbalance: {features['order_book_imbalance']:.3f}")
-            print(f"Trend: {features['imbalance_trend']}")
             print(f"Delta: {features['delta']}")
             print(f"Absorption UP: {features['absorption_up']}, Absorption DOWN: {features['absorption_down']}")
             print("---")
 
+            # 🔹 Анализ сигнала по дельте
             result = strat.analyze(features)
 
             if result["action"] == "ENTER":
@@ -39,11 +39,10 @@ def run_bot():
                 price = result["price"]
                 strat.record_entry(side, price)
                 telegram.send_trade_signal(side, price)
-                print(f"SIGNAL: {side} {price:.2f}")
-                print("===")
+                print(f"SIGNAL: {side} {price:.2f} | Reason: {result['reason']}")
             else:
-                print(f"HOLD: {result['reason']}")
-                print("---")
+                print(f"HOLD | Reason: {result['reason']}")
+            print("---")
 
             time.sleep(BUCKET_SECONDS)
 
