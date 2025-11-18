@@ -4,24 +4,37 @@ import time
 class SimpleStrategy:
     def __init__(self):
         self.open_position = None
+        self.last_signal_time = 0
+        self.signal_cooldown = 300  # 5 минут коoldown между сигналами
 
     def analyze(self, features):
         price = features.get("current_price", 0.0)
         delta = features.get("delta", 0)
         abs_up = features.get("absorption_up", False)
         abs_down = features.get("absorption_down", False)
+        current_time = time.time()
 
-        # LONG сигнал - более чувствительный для M3
-        if delta < -0.5 or abs_down:  # было -1.0
+        # 🔒 Игнорируем если позиция открыта
+        if self.open_position is not None:
+            return {"action": "HOLD", "reason": "position_open"}
+
+        # ⏳ Игнорируем если не прошел коoldown
+        if current_time - self.last_signal_time < self.signal_cooldown:
+            return {"action": "HOLD", "reason": "cooldown"}
+
+        # 🎯 LONG сигнал - ВЫШЕ порог для надежности
+        if delta < -1.0 or abs_down:  # УВЕЛИЧЕНО с -0.5 до -1.0
+            self.last_signal_time = current_time
             return {
                 "action": "ENTER",
-                "side": "LONG",
+                "side": "LONG", 
                 "price": price,
                 "reason": f"absorption_down / delta {delta:.1f}"
             }
 
-        # SHORT сигнал - более чувствительный для M3
-        if delta > 0.5 or abs_up:  # было 1.0
+        # 🎯 SHORT сигнал - ВЫШЕ порог для надежности  
+        if delta > 1.0 or abs_up:  # УВЕЛИЧЕНО с 0.5 до 1.0
+            self.last_signal_time = current_time
             return {
                 "action": "ENTER",
                 "side": "SHORT",
@@ -37,3 +50,7 @@ class SimpleStrategy:
             "entry_price": price,
             "entry_ts": time.time()
         }
+
+    def close_position(self):
+        """Закрыть позицию (для тестирования)"""
+        self.open_position = None
